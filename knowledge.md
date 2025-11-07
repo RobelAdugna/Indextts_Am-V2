@@ -136,6 +136,36 @@ uv sync --all-extras
 bash scripts/LANGUAGE/end_to_end.sh
 ```
 
+## Dataset Naming Convention
+
+### Consistent Segment Naming
+Segment files use consistent, sequential naming:
+- Format: `spk{speaker_id:03d}_{segment_number:06d}.wav`
+- Examples: `spk000_000001.wav`, `spk001_000234.wav`
+
+**Single Speaker Mode** (`--single-speaker`):
+- All segments use speaker ID `000`
+- Sequential numbering across all files
+- Example: `spk000_000001.wav` through `spk000_002345.wav`
+- Use for: Single narrator datasets, audiobooks, single podcast host
+
+**Multi-Speaker Mode** (default):
+- Each source audio file gets unique speaker ID
+- Sequential numbering continues globally
+- Example: Video 1 → `spk000_*`, Video 2 → `spk001_*`, etc.
+- Use for: Multiple speakers, diverse sources, conversational data
+
+**Manifest Fields:**
+- `id`: Segment ID (matches filename without .wav)
+- `speaker`: Speaker ID (e.g., "spk000")
+- `source_file`: Original filename for reference
+
+This ensures:
+- Consistent filename length
+- Easy sorting and organization  
+- Clear speaker identification
+- No long/unwieldy filenames from source videos
+
 ## Common Issues & Solutions
 
 ### Subtitle Detection Issues
@@ -146,6 +176,46 @@ bash scripts/LANGUAGE/end_to_end.sh
 - Language codes: `video.am.srt`, `video.en.srt`, `video.amh.vtt`
 
 If issues persist, check the actual filenames in the download directory.
+
+### Dataset Quality Improvements (v2)
+The `create_amharic_dataset.py` tool includes comprehensive quality filtering:
+
+**RMS-Based Boundary Refinement:**
+- Uses slicer2.py approach to find quietest point in search window
+- Validates boundaries don't change duration drastically
+- Returns confidence score for each refinement
+
+**Amharic Script Validation:**
+- Checks text is ≥50% Ethiopic characters (U+1200-137F ranges)
+- Filters mixed-script content
+- Removes subtitle formatting artifacts
+
+**Audio Quality Checks:**
+- SNR filtering (default: ≥15dB)
+- Silence ratio limit (default: ≤30%)
+- Clipping detection (default: ≤1%)
+- Speech rate validation (3-25 chars/second)
+
+**Text Quality Checks:**
+- Minimum word count (default: 3 words)
+- Automatic subtitle artifact removal ([Music], speaker labels, HTML tags)
+- Duplicate detection via content hashing
+
+**Quality Reporting:**
+- Use `--quality-report` to save JSON with rejection statistics
+- Each segment includes SNR, speech rate, Amharic ratio, and boundary confidence
+- Detailed breakdown of rejection reasons
+
+**Example:**
+```bash
+python tools/create_amharic_dataset.py \
+  --input-dir downloads \
+  --output-dir dataset \
+  --min-snr 20.0 \
+  --max-silence-ratio 0.2 \
+  --min-words 5 \
+  --quality-report quality.json
+```
 
 ### Out of Memory
 - Reduce `--batch-size`

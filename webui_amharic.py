@@ -175,6 +175,13 @@ def create_dataset(
     min_duration: float,
     max_duration: float,
     refine_boundaries: bool,
+    enable_quality_filter: bool,
+    min_snr: float,
+    max_silence_ratio: float,
+    min_words: int,
+    min_speech_rate: float,
+    max_speech_rate: float,
+    single_speaker: bool,
     progress=gr.Progress()
 ) -> Tuple[str, str, Dict]:
     """Create dataset from audio and subtitle files"""
@@ -203,10 +210,23 @@ def create_dataset(
         "--output-dir", str(output_path),
         "--min-duration", str(min_duration),
         "--max-duration", str(max_duration),
+        "--min-snr", str(min_snr),
+        "--max-silence-ratio", str(max_silence_ratio),
+        "--min-words", str(min_words),
     ]
     
     if not refine_boundaries:
         cmd.append("--no-refine")
+    
+    if not enable_quality_filter:
+        cmd.append("--no-quality-check")
+    
+    if single_speaker:
+        cmd.append("--single-speaker")
+    
+    # Add quality report
+    quality_report_path = output_path / "quality_report.json"
+    cmd.extend(["--quality-report", str(quality_report_path)])
     
     try:
         progress(0.3, desc="Processing audio files...")
@@ -230,7 +250,18 @@ def create_dataset(
             
             pipeline_state["dataset_dir"] = str(output_path)
             
-            status_html = format_status_html(f"✅ Dataset created: {segment_count} segments")
+            # Parse quality report if available
+            quality_report_path = output_path / "quality_report.json"
+            quality_summary = ""
+            if quality_report_path.exists():
+                try:
+                    with open(quality_report_path, 'r', encoding='utf-8') as f:
+                        stats = json.load(f)
+                    quality_summary = f" (Accepted: {stats.get('accepted', 0)}, Rejected: {stats.get('rejected', 0)})"
+                except:
+                    pass
+            
+            status_html = format_status_html(f"✅ Dataset created: {segment_count} segments{quality_summary}")
             log_text = result.stdout
         else:
             status_html = format_status_html(f"❌ Error creating dataset", False)
@@ -739,6 +770,10 @@ def create_ui():
         # Tab 2: Dataset Creation
         with gr.Tab("2️⃣ Dataset"):
             gr.Markdown("### Create Training Dataset from Audio + Subtitles")
+            gr.Markdown("""
+            **Enhanced Quality Filtering**: Automatically filters segments based on audio quality (SNR, clipping, silence) 
+            and text quality (Amharic script validation, word count, speech rate). Optimized defaults for Amharic.
+            """)
             
             with gr.Row():
                 with gr.Column():
@@ -751,26 +786,98 @@ def create_ui():
                         value="amharic_dataset"
                     )
                     
+                    gr.Markdown("#### Duration Filters")
                     with gr.Row():
                         min_duration = gr.Slider(
                             label="Min Duration (seconds)",
                             minimum=0.5,
                             maximum=5.0,
                             value=1.0,
-                            step=0.1
+                            step=0.1,
+                            info="Minimum segment length"
                         )
                         max_duration = gr.Slider(
                             label="Max Duration (seconds)",
                             minimum=5.0,
                             maximum=60.0,
                             value=30.0,
-                            step=1.0
+                            step=1.0,
+                            info="Maximum segment length"
                         )
                     
+                    gr.Markdown("#### Boundary Refinement")
                     refine_boundaries = gr.Checkbox(
-                        label="Refine boundaries with silence detection",
-                        value=True
+                        label="Enable RMS-based boundary refinement",
+                        value=True,
+                        info="Uses advanced silence detection to find precise cut points"
                     )
+                    
+                    gr.Markdown("#### Naming Scheme")
+                    single_speaker = gr.Checkbox(
+                        label="Single Speaker Mode",
+                        value=False,
+                        info="All segments use speaker ID 000. Disable for multi-speaker datasets."
+                    )
+                    gr.Markdown(
+                        "**File naming:** `spk{speaker_id}_{segment:06d}.wav` (e.g., `spk000_000001.wav`, `spk001_000042.wav`)"
+                    )
+                    
+                    gr.Markdown("#### Quality Filtering (Amharic-Optimized)")
+                    enable_quality_filter = gr.Checkbox(
+                        label="Enable Quality Filtering",
+                        value=True,
+                        info="Recommended: Filters low-quality segments automatically"
+                    )
+                    
+                    with gr.Accordion("Quality Filter Settings", open=False):
+                        gr.Markdown("**Audio Quality**")
+                        with gr.Row():
+                            min_snr = gr.Slider(
+                                label="Minimum SNR (dB)",
+                                minimum=10.0,
+                                maximum=30.0,
+                                value=15.0,
+                                step=1.0,
+                                info="Signal-to-Noise Ratio threshold"
+                            )
+                            max_silence_ratio = gr.Slider(
+                                label="Max Silence Ratio",
+                                minimum=0.1,
+                                maximum=0.5,
+                                value=0.3,
+                                step=0.05,
+                                info="Maximum allowed silence (0-1)"
+                            )
+                        
+                        gr.Markdown("**Text Quality (Amharic)**")
+                        with gr.Row():
+                            min_words = gr.Slider(
+                                label="Minimum Word Count",
+                                minimum=1,
+                                maximum=10,
+                                value=3,
+                                step=1,
+                                info="Minimum Amharic words per segment"
+                            )
+                        
+                        gr.Markdown("**Speech Rate (characters/second)**")
+                        with gr.Row():
+                            min_speech_rate = gr.Slider(
+                                label="Min Speech Rate",
+                                minimum=1.0,
+                                maximum=10.0,
+                                value=5.0,
+                                step=0.5,
+                                info="Too slow = poor alignment (Amharic: 5-20 typical)"
+                            )
+                            max_speech_rate = gr.Slider(
+                                label="Max Speech Rate",
+                                minimum=15.0,
+                                maximum=40.0,
+                                value=20.0,
+                                step=1.0,
+                                info="Too fast = poor alignment (Amharic: 5-20 typical)"
+                            )
                     
                     create_dataset_btn = gr.Button("🎵 Create Dataset", variant="primary", size="lg")
                 
@@ -787,7 +894,20 @@ def create_ui():
             
             create_dataset_btn.click(
                 create_dataset,
-                inputs=[input_dir_dataset, output_dir_dataset, min_duration, max_duration, refine_boundaries],
+                inputs=[
+                    input_dir_dataset, 
+                    output_dir_dataset, 
+                    min_duration, 
+                    max_duration, 
+                    refine_boundaries,
+                    enable_quality_filter,
+                    min_snr,
+                    max_silence_ratio,
+                    min_words,
+                    min_speech_rate,
+                    max_speech_rate,
+                    single_speaker
+                ],
                 outputs=[dataset_logs, dataset_status, state]
             ).then(
                 update_pipeline_status,

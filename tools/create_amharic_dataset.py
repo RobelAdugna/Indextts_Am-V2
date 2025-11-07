@@ -3,7 +3,7 @@
 Amharic Dataset Creator from Media Files + Subtitles
 
 Creates training dataset from audio files and SRT/VTT subtitles.
-Supports multiple input sources and precise audio segmentation.
+Supports multiple input sources and precise audio segmentation with quality filtering.
 """
 
 import argparse
@@ -13,7 +13,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 
 import librosa
 import numpy as np
@@ -30,6 +30,288 @@ class SubtitleSegment:
     end_time: float
     text: str
     index: int
+
+
+@dataclass
+class QualityMetrics:
+    """Quality metrics for a segment"""
+    snr: float
+    silence_ratio: float
+    speech_rate: float  # characters per second
+    clipping_ratio: float
+    amharic_ratio: float
+    passed: bool
+    rejection_reasons: List[str]
+
+
+# =============================================================================
+# RMS and Silence Detection (from slicer2.py)
+# =============================================================================
+
+def get_rms(
+    y: np.ndarray,
+    frame_length: int = 2048,
+    hop_length: int = 512,
+    pad_mode: str = "constant",
+) -> np.ndarray:
+    """Calculate RMS energy per frame (from slicer2.py)
+    
+    Args:
+        y: Audio signal
+        frame_length: Frame length
+        hop_length: Hop length between frames
+        pad_mode: Padding mode
+    
+    Returns:
+        RMS values per frame
+    """
+    padding = (int(frame_length // 2), int(frame_length // 2))
+    y = np.pad(y, padding, mode=pad_mode)
+
+    axis = -1
+    out_strides = y.strides + tuple([y.strides[axis]])
+    x_shape_trimmed = list(y.shape)
+    x_shape_trimmed[axis] -= frame_length - 1
+    out_shape = tuple(x_shape_trimmed) + tuple([frame_length])
+    xw = np.lib.stride_tricks.as_strided(y, shape=out_shape, strides=out_strides)
+    
+    if axis < 0:
+        target_axis = axis - 1
+    else:
+        target_axis = axis + 1
+    xw = np.moveaxis(xw, -1, target_axis)
+    
+    slices = [slice(None)] * xw.ndim
+    slices[axis] = slice(0, None, hop_length)
+    x = xw[tuple(slices)]
+
+    power = np.mean(np.abs(x) ** 2, axis=-2, keepdims=True)
+    return np.sqrt(power)
+
+
+# =============================================================================
+# Text Quality Checks
+# =============================================================================
+
+def is_amharic_script(text: str) -> Tuple[bool, float]:
+    """Check if text is primarily Amharic/Ethiopic script
+    
+    Args:
+        text: Text to check
+    
+    Returns:
+        (is_amharic, amharic_ratio) tuple
+    """
+    if not text:
+        return False, 0.0
+    
+    # Ethiopic Unicode ranges
+    # U+1200-U+137F: Ethiopic
+    # U+1380-U+139F: Ethiopic Supplement
+    # U+2D80-U+2DDF: Ethiopic Extended
+    # U+AB00-U+AB2F: Ethiopic Extended-A
+    ethiopic_chars = 0
+    total_chars = 0
+    
+    for char in text:
+        code = ord(char)
+        total_chars += 1
+        
+        if ((0x1200 <= code <= 0x137F) or
+            (0x1380 <= code <= 0x139F) or
+            (0x2D80 <= code <= 0x2DDF) or
+            (0xAB00 <= code <= 0xAB2F)):
+            ethiopic_chars += 1
+    
+    if total_chars == 0:
+        return False, 0.0
+    
+    ratio = ethiopic_chars / total_chars
+    return ratio >= 0.5, ratio  # At least 50% Amharic
+
+
+def clean_subtitle_text(text: str) -> str:
+    """Remove subtitle artifacts and formatting
+    
+    Args:
+        text: Raw subtitle text
+    
+    Returns:
+        Cleaned text
+    """
+    # Remove HTML/XML tags
+    text = re.sub(r'<[^>]+>', '', text)
+    
+    # Remove formatting markers
+    text = re.sub(r'\{[^}]+\}', '', text)
+    
+    # Remove speaker labels
+    text = re.sub(r'^[A-Z\s]+:\s*', '', text)
+    
+    # Remove sound effects markers (English and Amharic)
+    text = re.sub(r'\[[^\]]+\]', '', text)  # Removes [Music], [ሙዚቃ], [Applause], etc.
+    text = re.sub(r'\([^)]*[Mm]usic[^)]*\)', '', text)
+    text = re.sub(r'\([^)]*[Aa]pplause[^)]*\)', '', text)
+    text = re.sub(r'\([^)]*ሙዚቃ[^)]*\)', '', text)  # (ሙዚቃ) - Amharic music
+    text = re.sub(r'\([^)]*ድምፅ[^)]*\)', '', text)  # (ድምፅ) - Amharic sound
+    
+    # Remove multiple spaces
+    text = re.sub(r'\s+', ' ', text)
+    
+    return text.strip()
+
+
+def count_words(text: str) -> int:
+    """Count words in Amharic text
+    
+    Amharic words are typically separated by spaces or word separators (፡)
+    """
+    # Split by spaces and Ethiopic word separator
+    words = re.split(r'[\s\u1361]+', text)
+    return len([w for w in words if w.strip()])
+
+
+# =============================================================================
+# Audio Quality Checks
+# =============================================================================
+
+def calculate_snr(audio: np.ndarray, sr: int) -> float:
+    """Calculate Signal-to-Noise Ratio
+    
+    Args:
+        audio: Audio signal
+        sr: Sample rate
+    
+    Returns:
+        SNR in dB
+    """
+    # Use RMS to estimate signal and noise
+    rms = get_rms(audio, hop_length=512).squeeze()
+    
+    if len(rms) < 10:
+        return 0.0
+    
+    # Assume top 60% is signal, bottom 40% is noise
+    sorted_rms = np.sort(rms)
+    noise_threshold_idx = int(len(sorted_rms) * 0.4)
+    
+    noise_rms = np.mean(sorted_rms[:noise_threshold_idx])
+    signal_rms = np.mean(sorted_rms[noise_threshold_idx:])
+    
+    if noise_rms == 0:
+        return 100.0  # Very clean signal
+    
+    snr = 20 * np.log10(signal_rms / noise_rms)
+    return float(snr)
+
+
+def calculate_silence_ratio(audio: np.ndarray, sr: int, threshold_db: float = -40.0) -> float:
+    """Calculate what fraction of audio is silence
+    
+    Args:
+        audio: Audio signal
+        sr: Sample rate
+        threshold_db: Silence threshold in dB
+    
+    Returns:
+        Ratio of silent frames (0.0 to 1.0)
+    """
+    rms = get_rms(audio, hop_length=512).squeeze()
+    
+    if len(rms) == 0:
+        return 1.0
+    
+    # Convert to dB
+    rms_db = 20 * np.log10(rms + 1e-10)
+    
+    silent_frames = np.sum(rms_db < threshold_db)
+    return silent_frames / len(rms)
+
+
+def detect_clipping(audio: np.ndarray, threshold: float = 0.99) -> float:
+    """Detect audio clipping
+    
+    Args:
+        audio: Audio signal
+        threshold: Amplitude threshold for clipping
+    
+    Returns:
+        Ratio of clipped samples
+    """
+    clipped = np.abs(audio) >= threshold
+    return np.sum(clipped) / len(audio)
+
+
+def assess_segment_quality(
+    audio: np.ndarray,
+    text: str,
+    sr: int,
+    config: dict
+) -> QualityMetrics:
+    """Assess quality of a segment
+    
+    Args:
+        audio: Audio signal
+        text: Normalized text
+        sr: Sample rate
+        config: Quality thresholds configuration
+    
+    Returns:
+        QualityMetrics object
+    """
+    reasons = []
+    
+    # Audio quality
+    snr = calculate_snr(audio, sr)
+    silence_ratio = calculate_silence_ratio(audio, sr, config.get('silence_threshold_db', -40.0))
+    clipping_ratio = detect_clipping(audio, config.get('clipping_threshold', 0.99))
+    
+    # Text quality
+    is_amharic, amharic_ratio = is_amharic_script(text)
+    word_count = count_words(text)
+    duration = len(audio) / sr
+    speech_rate = len(text) / duration if duration > 0 else 0
+    
+    # Apply thresholds
+    passed = True
+    
+    if snr < config.get('min_snr', 15.0):
+        passed = False
+        reasons.append(f"Low SNR: {snr:.1f}dB")
+    
+    if silence_ratio > config.get('max_silence_ratio', 0.3):
+        passed = False
+        reasons.append(f"Too much silence: {silence_ratio:.1%}")
+    
+    if clipping_ratio > config.get('max_clipping_ratio', 0.01):
+        passed = False
+        reasons.append(f"Clipping detected: {clipping_ratio:.1%}")
+    
+    if not is_amharic:
+        passed = False
+        reasons.append(f"Not Amharic: {amharic_ratio:.1%} Ethiopic chars")
+    
+    if word_count < config.get('min_word_count', 3):
+        passed = False
+        reasons.append(f"Too few words: {word_count}")
+    
+    if speech_rate < config.get('min_speech_rate', 3.0):
+        passed = False
+        reasons.append(f"Speech too slow: {speech_rate:.1f} chars/s")
+    
+    if speech_rate > config.get('max_speech_rate', 25.0):
+        passed = False
+        reasons.append(f"Speech too fast: {speech_rate:.1f} chars/s")
+    
+    return QualityMetrics(
+        snr=snr,
+        silence_ratio=silence_ratio,
+        speech_rate=speech_rate,
+        clipping_ratio=clipping_ratio,
+        amharic_ratio=amharic_ratio,
+        passed=passed,
+        rejection_reasons=reasons
+    )
 
 
 def parse_srt_time(time_str: str) -> float:
@@ -239,9 +521,14 @@ def refine_segment_boundaries(
     sr: int,
     start_time: float,
     end_time: float,
-    search_window: float = 0.3
-) -> Tuple[float, float]:
-    """Refine segment boundaries using silence detection
+    search_window: float = 0.5,
+    threshold_db: float = -40.0,
+    hop_size_ms: int = 20
+) -> Tuple[float, float, float]:
+    """Refine segment boundaries using RMS-based silence detection
+    
+    Uses approach from slicer2.py - find quietest point (minimum RMS)
+    within search window around subtitle boundaries.
     
     Args:
         audio: Full audio array
@@ -249,40 +536,71 @@ def refine_segment_boundaries(
         start_time: Initial start time
         end_time: Initial end time
         search_window: How far to search in seconds
+        threshold_db: Silence threshold in dB
+        hop_size_ms: Hop size for RMS calculation in milliseconds
     
     Returns:
-        Refined (start_time, end_time)
+        Tuple of (refined_start, refined_end, confidence_score)
     """
+    hop_size = int(sr * hop_size_ms / 1000)
+    
     # Extract search regions
     start_search_begin = max(0, start_time - search_window)
-    start_search_end = start_time + search_window
+    start_search_end = min(len(audio) / sr, start_time + search_window)
     
-    end_search_begin = end_time - search_window
+    end_search_begin = max(0, end_time - search_window)
     end_search_end = min(len(audio) / sr, end_time + search_window)
     
     # Get audio segments
     start_audio = audio[int(start_search_begin * sr):int(start_search_end * sr)]
     end_audio = audio[int(end_search_begin * sr):int(end_search_end * sr)]
     
-    # Detect silence
-    start_silences = detect_silence(start_audio, sr)
-    end_silences = detect_silence(end_audio, sr)
+    # Calculate RMS
+    if len(start_audio) > hop_size:
+        start_rms = get_rms(start_audio, hop_length=hop_size).squeeze()
+        start_rms_db = 20 * np.log10(start_rms + 1e-10)
+        
+        # Find quietest point (minimum RMS)
+        min_idx = np.argmin(start_rms)
+        min_rms_db = start_rms_db[min_idx]
+        
+        # Only use if below threshold
+        if min_rms_db < threshold_db:
+            new_start = start_search_begin + (min_idx * hop_size / sr)
+        else:
+            new_start = start_time
+    else:
+        new_start = start_time
     
-    # Adjust start time
-    new_start = start_time
-    if start_silences:
-        # Find silence closest to original start
-        closest_silence = min(start_silences, key=lambda s: abs(s[1] - search_window))
-        new_start = start_search_begin + closest_silence[1]
+    # Same for end boundary
+    if len(end_audio) > hop_size:
+        end_rms = get_rms(end_audio, hop_length=hop_size).squeeze()
+        end_rms_db = 20 * np.log10(end_rms + 1e-10)
+        
+        min_idx = np.argmin(end_rms)
+        min_rms_db = end_rms_db[min_idx]
+        
+        if min_rms_db < threshold_db:
+            new_end = end_search_begin + (min_idx * hop_size / sr)
+        else:
+            new_end = end_time
+    else:
+        new_end = end_time
     
-    # Adjust end time
-    new_end = end_time
-    if end_silences:
-        # Find silence closest to original end
-        closest_silence = min(end_silences, key=lambda s: abs(s[0] - search_window))
-        new_end = end_search_begin + closest_silence[0]
+    # Calculate confidence (based on RMS drop at boundaries)
+    confidence = 0.5  # Default neutral confidence
     
-    return new_start, new_end
+    # Validate boundaries didn't change too much
+    duration_change = abs((new_end - new_start) - (end_time - start_time))
+    if duration_change > 0.5:  # More than 0.5s change is suspicious
+        # Revert to original
+        new_start = start_time
+        new_end = end_time
+        confidence = 0.0
+    else:
+        confidence = 1.0 - (duration_change / 0.5)  # Higher confidence for smaller changes
+    
+    return new_start, new_end, confidence
 
 
 def segment_audio(
@@ -293,7 +611,11 @@ def segment_audio(
     refine_boundaries: bool = True,
     min_duration: float = 1.0,
     max_duration: float = 30.0,
-) -> List[dict]:
+    quality_config: Optional[dict] = None,
+    report_quality: bool = True,
+    speaker_id: int = 0,
+    segment_start_idx: int = 0
+) -> Tuple[List[dict], Dict, int]:
     """Segment audio file according to subtitles
     
     Args:
@@ -323,26 +645,65 @@ def segment_audio(
     audio_output_dir = output_dir / "audio"
     audio_output_dir.mkdir(parents=True, exist_ok=True)
     
+    # Quality config defaults
+    if quality_config is None:
+        quality_config = {
+            'min_snr': 15.0,
+            'max_silence_ratio': 0.3,
+            'max_clipping_ratio': 0.01,
+            'min_word_count': 3,
+            'min_speech_rate': 3.0,
+            'max_speech_rate': 25.0,
+            'silence_threshold_db': -40.0,
+            'clipping_threshold': 0.99
+        }
+    
     entries = []
     base_name = audio_path.stem
+    quality_stats = {
+        'total_segments': 0,
+        'accepted': 0,
+        'rejected': 0,
+        'rejection_reasons': {}
+    }
+    
+    segment_counter = segment_start_idx
     
     for seg in tqdm(segments, desc=f"Processing {audio_path.name}"):
+        quality_stats['total_segments'] += 1
+        
         # Check duration
         duration = seg.end_time - seg.start_time
         if duration < min_duration or duration > max_duration:
+            quality_stats['rejected'] += 1
+            quality_stats['rejection_reasons'].setdefault('duration', 0)
+            quality_stats['rejection_reasons']['duration'] += 1
             continue
         
-        # Normalize text
-        text = normalizer.normalize(seg.text, language="am")
+        # Clean and normalize text
+        cleaned_text = clean_subtitle_text(seg.text)
+        
+        # Skip if cleaning removed all text (e.g., was only [ሙዚቃ])
+        if not cleaned_text or len(cleaned_text.strip()) == 0:
+            quality_stats['rejected'] += 1
+            quality_stats['rejection_reasons'].setdefault('music_or_sound_only', 0)
+            quality_stats['rejection_reasons']['music_or_sound_only'] += 1
+            continue
+        
+        text = normalizer.normalize(cleaned_text, language="am")
         if not text or len(text.strip()) == 0:
+            quality_stats['rejected'] += 1
+            quality_stats['rejection_reasons'].setdefault('empty_after_normalization', 0)
+            quality_stats['rejection_reasons']['empty_after_normalization'] += 1
             continue
         
         # Refine boundaries if requested
         start_time = seg.start_time
         end_time = seg.end_time
+        confidence = 1.0
         
         if refine_boundaries:
-            start_time, end_time = refine_segment_boundaries(
+            start_time, end_time, confidence = refine_segment_boundaries(
                 audio, sr, start_time, end_time
             )
         
@@ -351,26 +712,49 @@ def segment_audio(
         end_sample = int(end_time * sr)
         audio_segment = audio[start_sample:end_sample]
         
-        # Generate unique ID
-        content_hash = hashlib.md5(text.encode()).hexdigest()[:8]
-        segment_id = f"{base_name}_{seg.index:04d}_{content_hash}"
+        # Quality assessment
+        if report_quality:
+            quality = assess_segment_quality(audio_segment, text, sr, quality_config)
+            
+            if not quality.passed:
+                quality_stats['rejected'] += 1
+                for reason in quality.rejection_reasons:
+                    quality_stats['rejection_reasons'].setdefault(reason, 0)
+                    quality_stats['rejection_reasons'][reason] += 1
+                continue
+        
+        # Generate consistent segment ID
+        # Format: spk{speaker_id}_{segment_number:06d}
+        segment_id = f"spk{speaker_id:03d}_{segment_counter:06d}"
+        segment_counter += 1
         
         # Save audio
         audio_file = audio_output_dir / f"{segment_id}.wav"
         sf.write(audio_file, audio_segment, sr)
         
-        # Create entry
+        # Create entry with quality metrics
         entry = {
             "id": segment_id,
             "text": text,
             "audio": str(audio_file.relative_to(output_dir)),
             "duration": float(end_time - start_time),
             "language": "am",
-            "speaker": base_name,
+            "speaker": f"spk{speaker_id:03d}",  # Consistent speaker ID
+            "source_file": base_name,  # Keep original filename for reference
         }
+        
+        if report_quality:
+            entry["quality"] = {
+                "snr": float(quality.snr),
+                "speech_rate": float(quality.speech_rate),
+                "amharic_ratio": float(quality.amharic_ratio),
+                "boundary_confidence": float(confidence)
+            }
+        
         entries.append(entry)
+        quality_stats['accepted'] += 1
     
-    return entries
+    return entries, quality_stats, segment_counter
 
 
 def process_directory(
@@ -379,7 +763,10 @@ def process_directory(
     normalizer: TextNormalizer,
     audio_exts: List[str] = None,
     subtitle_exts: List[str] = None,
-) -> List[dict]:
+    quality_config: Optional[dict] = None,
+    report_quality: bool = True,
+    single_speaker: bool = False
+) -> Tuple[List[dict], Dict]:
     """Process all audio/subtitle pairs in a directory
     
     Args:
@@ -398,6 +785,18 @@ def process_directory(
         subtitle_exts = ['.srt', '.vtt', '.webvtt']
     
     all_entries = []
+    combined_stats = {
+        'total_segments': 0,
+        'accepted': 0,
+        'rejected': 0,
+        'rejection_reasons': {},
+        'files_processed': 0,
+        'files_failed': 0
+    }
+    
+    # Track speaker IDs and segment numbers for consistent naming
+    speaker_counter = 0
+    global_segment_counter = 0
     
     # Find all audio files
     audio_files = []
@@ -432,22 +831,45 @@ def process_directory(
             print(f"Warning: No subtitle found for {audio_file.name}")
             continue
         
-        print(f"\nProcessing: {audio_file.name} + {subtitle_file.name}")
+        print(f"\nProcessing: {audio_file.name} + {subtitle_file.name} [Speaker {speaker_counter:03d}]")
         
         try:
-            entries = segment_audio(
+            # Use speaker_id = 0 for single speaker, increment for multi-speaker
+            current_speaker_id = 0 if single_speaker else speaker_counter
+            
+            entries, stats, new_segment_counter = segment_audio(
                 audio_file,
                 subtitle_file,
                 output_dir,
                 normalizer,
+                quality_config=quality_config,
+                report_quality=report_quality,
+                speaker_id=current_speaker_id,
+                segment_start_idx=global_segment_counter
             )
+            
+            # Update counters
+            global_segment_counter = new_segment_counter
+            if not single_speaker:
+                speaker_counter += 1
             all_entries.extend(entries)
-            print(f"  Generated {len(entries)} segments")
+            
+            # Update combined stats
+            combined_stats['total_segments'] += stats['total_segments']
+            combined_stats['accepted'] += stats['accepted']
+            combined_stats['rejected'] += stats['rejected']
+            for reason, count in stats['rejection_reasons'].items():
+                combined_stats['rejection_reasons'].setdefault(reason, 0)
+                combined_stats['rejection_reasons'][reason] += count
+            combined_stats['files_processed'] += 1
+            
+            print(f"  Generated {len(entries)} segments (accepted: {stats['accepted']}, rejected: {stats['rejected']})")
         except Exception as e:
             print(f"  Error: {e}")
+            combined_stats['files_failed'] += 1
             continue
     
-    return all_entries
+    return all_entries, combined_stats
 
 
 def parse_args():
@@ -496,6 +918,53 @@ def parse_args():
         help="Don't refine boundaries with silence detection"
     )
     
+    parser.add_argument(
+        "--no-quality-check",
+        action="store_true",
+        help="Skip quality filtering"
+    )
+    
+    parser.add_argument(
+        "--min-snr",
+        type=float,
+        default=15.0,
+        help="Minimum SNR in dB"
+    )
+    
+    parser.add_argument(
+        "--max-silence-ratio",
+        type=float,
+        default=0.3,
+        help="Maximum silence ratio (0.0 to 1.0)"
+    )
+    
+    parser.add_argument(
+        "--min-words",
+        type=int,
+        default=3,
+        help="Minimum word count"
+    )
+    
+    parser.add_argument(
+        "--quality-report",
+        type=Path,
+        default=None,
+        help="Path to save quality report JSON"
+    )
+    
+    parser.add_argument(
+        "--single-speaker",
+        action="store_true",
+        help="Treat all audio as single speaker (speaker ID = 0 for all)"
+    )
+    
+    parser.add_argument(
+        "--speaker-prefix",
+        type=str,
+        default="spk",
+        help="Prefix for speaker IDs in filenames (default: 'spk')"
+    )
+    
     return parser.parse_args()
 
 
@@ -517,12 +986,30 @@ def main():
     # Create normalizer
     normalizer = TextNormalizer(preferred_language="am")
     
+    # Build quality config (Amharic-optimized defaults)
+    quality_config = {
+        'min_snr': args.min_snr,
+        'max_silence_ratio': args.max_silence_ratio,
+        'max_clipping_ratio': 0.01,
+        'min_word_count': args.min_words,
+        'min_speech_rate': 5.0,  # Amharic syllabic - typically 5-20 chars/sec
+        'max_speech_rate': 20.0,
+        'silence_threshold_db': -40.0,
+        'clipping_threshold': 0.99
+    }
+    
     # Process all files
     print(f"Processing files in: {args.input_dir}")
-    entries = process_directory(
+    print(f"Quality filtering: {'disabled' if args.no_quality_check else 'enabled'}")
+    print(f"Speaker mode: {'single' if args.single_speaker else 'multi'}")
+    
+    entries, stats = process_directory(
         args.input_dir,
         args.output_dir,
         normalizer,
+        quality_config=quality_config,
+        report_quality=not args.no_quality_check,
+        single_speaker=args.single_speaker
     )
     
     # Write manifest
@@ -531,9 +1018,26 @@ def main():
         for entry in entries:
             f.write(json.dumps(entry, ensure_ascii=False) + '\n')
     
+    # Write quality report if requested
+    if args.quality_report:
+        with open(args.quality_report, 'w', encoding='utf-8') as f:
+            json.dump(stats, f, indent=2)
+        print(f"Quality report saved to: {args.quality_report}")
+    
+    # Print summary
     print(f"\nDataset created successfully!")
-    print(f"  Total segments: {len(entries)}")
-    print(f"  Output directory: {args.output_dir}")
+    print(f"  Files processed: {stats['files_processed']}")
+    print(f"  Files failed: {stats['files_failed']}")
+    print(f"  Total segments checked: {stats['total_segments']}")
+    print(f"  Accepted segments: {stats['accepted']}")
+    print(f"  Rejected segments: {stats['rejected']}")
+    
+    if stats['rejection_reasons']:
+        print(f"\n  Rejection breakdown:")
+        for reason, count in sorted(stats['rejection_reasons'].items(), key=lambda x: -x[1]):
+            print(f"    {reason}: {count}")
+    
+    print(f"\n  Output directory: {args.output_dir}")
     print(f"  Manifest: {manifest_path}")
 
 

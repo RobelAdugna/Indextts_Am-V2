@@ -84,7 +84,7 @@ python webui_amharic.py --host 127.0.0.1  # Localhost only
 
 ### Tab 2: Create Dataset
 
-**Purpose:** Segment audio files using subtitle timestamps with boundary refinement.
+**Purpose:** Segment audio files using subtitle timestamps with advanced quality filtering.
 
 **Steps:**
 1. Input directory auto-fills from download step (or specify manually)
@@ -92,17 +92,43 @@ python webui_amharic.py --host 127.0.0.1  # Localhost only
 3. Configure duration filters:
    - Minimum duration: 1.0s (recommended)
    - Maximum duration: 30.0s (recommended)
-4. Enable boundary refinement for better segmentation
-5. Click "🎵 Create Dataset"
+4. Enable RMS-based boundary refinement (recommended)
+5. **Configure naming scheme:**
+   - **Single Speaker Mode** (disabled by default): Use for single-speaker datasets
+     - All files named: `spk000_000001.wav`, `spk000_000002.wav`, etc.
+   - **Multi-Speaker Mode** (enabled by default): Each source file gets unique speaker ID
+     - Files named: `spk000_000001.wav`, `spk001_000042.wav`, `spk002_000089.wav`, etc.
+6. Enable quality filtering (recommended - Amharic-optimized defaults)
+6. **Optional:** Expand "Quality Filter Settings" to customize:
+   - **Audio Quality:**
+     - Minimum SNR: 15dB (higher = cleaner audio required)
+     - Max Silence Ratio: 0.3 (30% maximum silence)
+   - **Text Quality:**
+     - Minimum Words: 3 (Amharic words per segment)
+   - **Speech Rate:**
+     - Min: 3.0 chars/second (prevents too-slow segments)
+     - Max: 25.0 chars/second (prevents too-fast segments)
+8. Click "🎵 Create Dataset"
 
 **Output:** 
-- `manifest.jsonl` - Dataset manifest with metadata
+- `manifest.jsonl` - Dataset manifest with metadata + quality scores
 - `audio/` directory - Segmented WAV files
+- `quality_report.json` - Detailed quality statistics
+
+**Quality Filtering Benefits:**
+- **Amharic Script Validation:** Ensures ≥50% Ethiopic characters
+- **SNR Filtering:** Removes noisy segments
+- **Silence Detection:** Rejects segments with too much silence
+- **Clipping Detection:** Identifies distorted audio
+- **Speech Rate Validation:** Ensures proper text-audio alignment
+- **Subtitle Artifact Removal:** Automatically removes [Music], speaker labels, HTML tags
 
 **Tips:**
-- Boundary refinement uses silence detection for precise cuts
-- Duration filters help remove very short or very long segments
-- Process takes ~1 minute per hour of audio
+- Quality filtering is enabled by default - recommended for best results
+- Boundary refinement uses RMS-based silence detection (more precise than simple threshold)
+- Check `quality_report.json` for detailed rejection statistics
+- Adjust thresholds in accordion if too many/few segments are rejected
+- Process takes ~1-2 minutes per hour of audio (with quality filtering)
 
 ### Tab 3: Collect Corpus
 
