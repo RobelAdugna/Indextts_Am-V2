@@ -1,0 +1,21 @@
+# Universal Media Downloader Manifest
+# Format: One JSON object per line
+# Each line can have any combination of these fields:
+#
+# Remote URLs only:
+{"media_url": "https://www.example.com/download-media/tereffe.mp4", "srt_url": "https://www.example.com/downloads/tereffe(am).srt", "base_name": "tereffe"}
+
+# Local files only:
+{"media_local": "path/to/local/video.mp4", "srt_local": "path/to/local/video.srt"}
+
+# Hybrid (remote media + local SRT):
+{"media_url": "https://example.com/media.mp4", "srt_local": "local/subtitles.srt", "base_name": "hybrid_example"}
+
+# Hybrid (local media + remote SRT):
+{"media_local": "local/video.wav", "srt_url": "https://example.com/subtitles.srt"}
+
+# Media only (no subtitles):
+{"media_url": "https://example.com/audio.mp3"}
+
+# Real example matching your use case:
+{"media_url": "https://www.limboour.com/download-media/tereffe.mp4", "srt_url": "https://www.germew.net/emerged/downloads/tereffe(am).srt", "base_name": "tereffe_example"}

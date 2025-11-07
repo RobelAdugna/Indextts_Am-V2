@@ -1,0 +1,21 @@
+# Amharic YouTube URLs for Dataset Creation
+# Add YouTube URLs here, one per line
+# Lines starting with # are comments and will be ignored
+
+# Example URLs (replace with actual Amharic content):
+# https://www.youtube.com/watch?v=EXAMPLE1
+# https://www.youtube.com/watch?v=EXAMPLE2
+
+# Recommended sources:
+# - Amharic news channels
+# - Educational content in Amharic
+# - Audiobooks in Amharic
+# - Podcasts in Amharic
+# - Public speeches and lectures
+
+# Tips:
+# 1. Choose videos with clear speech
+# 2. Prefer videos with subtitles/captions
+# 3. Avoid videos with background music
+# 4. Select content from various speakers for diversity
+# 5. Ensure you have rights to use the content for training
