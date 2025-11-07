@@ -521,84 +521,100 @@ def refine_segment_boundaries(
     sr: int,
     start_time: float,
     end_time: float,
-    search_window: float = 0.5,
-    threshold_db: float = -40.0,
-    hop_size_ms: int = 20
+    search_window: float = 0.2,
+    threshold_db: float = -50.0,
+    hop_size_ms: int = 20,
+    start_margin: float = 0.15,
+    end_margin: float = 0.1,
+    min_silence_frames: int = 3
 ) -> Tuple[float, float, float]:
-    """Refine segment boundaries using RMS-based silence detection
+    """Refine segment boundaries with safety margins to prevent speech cutoff
     
-    Uses approach from slicer2.py - find quietest point (minimum RMS)
-    within search window around subtitle boundaries.
+    Two-stage approach:
+    1. Add safety margins (expand boundaries)
+    2. Optionally trim sustained silence (but never go inside original bounds)
     
     Args:
         audio: Full audio array
-        sr: Sample rate
-        start_time: Initial start time
-        end_time: Initial end time
-        search_window: How far to search in seconds
-        threshold_db: Silence threshold in dB
+        sr: Sample rate  
+        start_time: Initial start time from subtitle
+        end_time: Initial end time from subtitle
+        search_window: How far to search for silence (default: 0.2s)
+        threshold_db: Silence threshold in dB (default: -50dB, very quiet)
         hop_size_ms: Hop size for RMS calculation in milliseconds
+        start_margin: Safety margin before start (default: 0.15s)
+        end_margin: Safety margin after end (default: 0.1s)
+        min_silence_frames: Require this many consecutive silent frames
     
     Returns:
         Tuple of (refined_start, refined_end, confidence_score)
     """
     hop_size = int(sr * hop_size_ms / 1000)
+    audio_duration = len(audio) / sr
     
-    # Extract search regions
-    start_search_begin = max(0, start_time - search_window)
-    start_search_end = min(len(audio) / sr, start_time + search_window)
+    # Stage 1: Add safety margins (expand boundaries)
+    # This prevents cutting off speech at edges
+    expanded_start = max(0, start_time - start_margin)
+    expanded_end = min(audio_duration, end_time + end_margin)
     
-    end_search_begin = max(0, end_time - search_window)
-    end_search_end = min(len(audio) / sr, end_time + search_window)
+    # Stage 2: Search for sustained silence to trim excess
+    # But never trim beyond original subtitle boundaries!
+    start_search_begin = max(0, expanded_start)
+    start_search_end = start_time  # Don't search past original start
+    
+    end_search_begin = end_time  # Don't search before original end  
+    end_search_end = min(audio_duration, expanded_end)
     
     # Get audio segments
     start_audio = audio[int(start_search_begin * sr):int(start_search_end * sr)]
     end_audio = audio[int(end_search_begin * sr):int(end_search_end * sr)]
     
-    # Calculate RMS
-    if len(start_audio) > hop_size:
+    # Find sustained silence regions for trimming
+    new_start = expanded_start  # Default: use safety margin
+    
+    if len(start_audio) > hop_size * min_silence_frames:
         start_rms = get_rms(start_audio, hop_length=hop_size).squeeze()
         start_rms_db = 20 * np.log10(start_rms + 1e-10)
         
-        # Find quietest point (minimum RMS)
-        min_idx = np.argmin(start_rms)
-        min_rms_db = start_rms_db[min_idx]
+        # Find SUSTAINED silence (multiple consecutive frames below threshold)
+        silent_mask = start_rms_db < threshold_db
         
-        # Only use if below threshold
-        if min_rms_db < threshold_db:
-            new_start = start_search_begin + (min_idx * hop_size / sr)
-        else:
-            new_start = start_time
-    else:
-        new_start = start_time
+        # Look for sustained silence from the end backward (closest to speech start)
+        for i in range(len(silent_mask) - min_silence_frames, -1, -1):
+            if np.all(silent_mask[i:i+min_silence_frames]):
+                # Found sustained silence - trim to end of this silence region
+                new_start = start_search_begin + ((i + min_silence_frames) * hop_size / sr)
+                break
     
     # Same for end boundary
-    if len(end_audio) > hop_size:
+    new_end = expanded_end  # Default: use safety margin
+    
+    if len(end_audio) > hop_size * min_silence_frames:
         end_rms = get_rms(end_audio, hop_length=hop_size).squeeze()
         end_rms_db = 20 * np.log10(end_rms + 1e-10)
         
-        min_idx = np.argmin(end_rms)
-        min_rms_db = end_rms_db[min_idx]
+        # Find SUSTAINED silence from the beginning forward (closest to speech end)
+        silent_mask = end_rms_db < threshold_db
         
-        if min_rms_db < threshold_db:
-            new_end = end_search_begin + (min_idx * hop_size / sr)
-        else:
-            new_end = end_time
-    else:
-        new_end = end_time
+        for i in range(len(silent_mask) - min_silence_frames + 1):
+            if np.all(silent_mask[i:i+min_silence_frames]):
+                # Found sustained silence - trim to start of this silence region
+                new_end = end_search_begin + (i * hop_size / sr)
+                break
     
-    # Calculate confidence (based on RMS drop at boundaries)
-    confidence = 0.5  # Default neutral confidence
+    # Ensure boundaries make sense
+    if new_end <= new_start:
+        # Something went wrong, use expanded boundaries
+        new_start = expanded_start
+        new_end = expanded_end
     
-    # Validate boundaries didn't change too much
-    duration_change = abs((new_end - new_start) - (end_time - start_time))
-    if duration_change > 0.5:  # More than 0.5s change is suspicious
-        # Revert to original
-        new_start = start_time
-        new_end = end_time
-        confidence = 0.0
-    else:
-        confidence = 1.0 - (duration_change / 0.5)  # Higher confidence for smaller changes
+    # Ensure we didn't somehow go inside original subtitle bounds
+    new_start = min(new_start, start_time)
+    new_end = max(new_end, end_time)
+    
+    # Calculate confidence based on how much we expanded
+    expansion = (start_time - new_start) + (new_end - end_time)
+    confidence = 0.9 if expansion < 0.3 else 0.7  # High confidence for reasonable margins
     
     return new_start, new_end, confidence
 
@@ -963,6 +979,20 @@ def parse_args():
         type=str,
         default="spk",
         help="Prefix for speaker IDs in filenames (default: 'spk')"
+    )
+    
+    parser.add_argument(
+        "--start-margin",
+        type=float,
+        default=0.15,
+        help="Safety margin before subtitle start in seconds (default: 0.15)"
+    )
+    
+    parser.add_argument(
+        "--end-margin",
+        type=float,
+        default=0.1,
+        help="Safety margin after subtitle end in seconds (default: 0.1)"
     )
     
     return parser.parse_args()

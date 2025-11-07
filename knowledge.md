@@ -136,6 +136,38 @@ uv sync --all-extras
 bash scripts/LANGUAGE/end_to_end.sh
 ```
 
+## Critical Fix: Audio-Text Alignment
+
+### Problem: Segmented audio cuts off speech
+**Symptoms:** Audio starts too late (missing first words) or ends too early (cutting off final sounds)
+
+**Root Cause:** Previous RMS-based refinement searched for quietest point, which often was:
+- Quiet consonants (s, f, h) at word boundaries
+- Unvoiced phonemes in speech
+- Low-energy geminated consonants in Amharic
+
+**Solution:** Two-stage boundary processing:
+1. **Safety Margins** (expand boundaries):
+   - Start: +0.15s before subtitle (accounts for subtitle lag)
+   - End: +0.1s after subtitle (speech trails off)
+2. **Sustained Silence Trimming** (optional):
+   - Only trims if ≥3 consecutive frames below -50dB
+   - Never moves boundaries inside original subtitle times
+
+**Configuration:**
+- CLI: `--start-margin 0.15 --end-margin 0.1`
+- WebUI: Sliders under "Boundary Refinement & Safety Margins"
+- Increase margins if still hearing cutoffs
+- Disable refinement (`--no-refine`) to trust subtitles completely
+
+**Why This Works:**
+- Subtitles are typically 0.1-0.3s late at start, early at end
+- Safety margins ensure no speech is lost
+- Sustained silence requirement prevents cutting into quiet consonants
+- Never shrinks inside subtitle bounds (only expands)
+
+**Critical Fix Applied:** Expansion calculation corrected to `(start_time - new_start) + (new_end - end_time)`. Confidence score now properly reflects margin size.
+
 ## Dataset Naming Convention
 
 ### Consistent Segment Naming

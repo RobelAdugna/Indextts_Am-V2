@@ -175,6 +175,8 @@ def create_dataset(
     min_duration: float,
     max_duration: float,
     refine_boundaries: bool,
+    start_margin: float,
+    end_margin: float,
     enable_quality_filter: bool,
     min_snr: float,
     max_silence_ratio: float,
@@ -217,6 +219,10 @@ def create_dataset(
     
     if not refine_boundaries:
         cmd.append("--no-refine")
+    else:
+        # Add safety margins
+        cmd.extend(["--start-margin", str(start_margin)])
+        cmd.extend(["--end-margin", str(end_margin)])
     
     if not enable_quality_filter:
         cmd.append("--no-quality-check")
@@ -805,11 +811,34 @@ def create_ui():
                             info="Maximum segment length"
                         )
                     
-                    gr.Markdown("#### Boundary Refinement")
+                    gr.Markdown("#### Boundary Refinement & Safety Margins")
                     refine_boundaries = gr.Checkbox(
-                        label="Enable RMS-based boundary refinement",
+                        label="Enable boundary refinement",
                         value=True,
-                        info="Uses advanced silence detection to find precise cut points"
+                        info="Adds safety margins + trims sustained silence"
+                    )
+                    
+                    with gr.Row():
+                        start_margin = gr.Slider(
+                            label="Start Safety Margin (seconds)",
+                            minimum=0.0,
+                            maximum=0.5,
+                            value=0.15,
+                            step=0.05,
+                            info="Audio starts this much before subtitle (prevents cutoff)"
+                        )
+                        end_margin = gr.Slider(
+                            label="End Safety Margin (seconds)",
+                            minimum=0.0,
+                            maximum=0.5,
+                            value=0.1,
+                            step=0.05,
+                            info="Audio ends this much after subtitle (prevents cutoff)"
+                        )
+                    
+                    gr.Markdown(
+                        "💡 **Safety margins prevent speech cutoff.** Start margin: 0.15s (typical subtitle lag). "
+                        "End margin: 0.1s (speech trails off). Increase if you hear words being cut."
                     )
                     
                     gr.Markdown("#### Naming Scheme")
@@ -900,6 +929,8 @@ def create_ui():
                     min_duration, 
                     max_duration, 
                     refine_boundaries,
+                    start_margin,
+                    end_margin,
                     enable_quality_filter,
                     min_snr,
                     max_silence_ratio,
