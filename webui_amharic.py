@@ -178,6 +178,7 @@ def create_dataset(
     use_vad: bool,
     start_margin: float,
     end_margin: float,
+    enable_text_dedup: bool,
     enable_quality_filter: bool,
     min_snr: float,
     max_silence_ratio: float,
@@ -228,6 +229,9 @@ def create_dataset(
         # Add safety margins
         cmd.extend(["--start-margin", str(start_margin)])
         cmd.extend(["--end-margin", str(end_margin)])
+    
+    if not enable_text_dedup:
+        cmd.append("--no-text-dedup")
     
     if not enable_quality_filter:
         cmd.append("--no-quality-check")
@@ -852,6 +856,18 @@ def create_ui():
                         "End margin: 0.1s (speech trails off). Increase if you hear words being cut."
                     )
                     
+                    gr.Markdown("#### Text Deduplication")
+                    enable_text_dedup = gr.Checkbox(
+                        label="Remove overlapping text from subtitles",
+                        value=True,
+                        info="Subtitles often repeat text across lines. Enable to deduplicate."
+                    )
+                    
+                    gr.Markdown(
+                        "💡 **Common in audiobooks:** Each subtitle repeats part of the previous one for readability. "
+                        "Deduplication removes this overlap while keeping audio intact."
+                    )
+                    
                     gr.Markdown("#### Naming Scheme")
                     single_speaker = gr.Checkbox(
                         label="Single Speaker Mode",
@@ -943,6 +959,7 @@ def create_ui():
                     use_vad,
                     start_margin,
                     end_margin,
+                    enable_text_dedup,
                     enable_quality_filter,
                     min_snr,
                     max_silence_ratio,

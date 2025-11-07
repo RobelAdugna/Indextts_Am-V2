@@ -478,6 +478,74 @@ def parse_vtt_time(time_str: str) -> float:
         raise ValueError(f"Invalid VTT timestamp: {time_str}")
 
 
+def deduplicate_subtitle_text(
+    segments: List[SubtitleSegment],
+    min_overlap_words: int = 3
+) -> List[SubtitleSegment]:
+    """Remove overlapping text from consecutive subtitle segments
+    
+    Many subtitle files have "rolling text" where each line repeats part
+    of the previous line for viewer comprehension. This removes that overlap.
+    
+    Args:
+        segments: List of subtitle segments
+        min_overlap_words: Minimum words for overlap detection (default: 3)
+    
+    Returns:
+        List of segments with deduplicated text
+    """
+    if len(segments) <= 1:
+        return segments
+    
+    deduplicated = []
+    prev_text = ""
+    
+    for i, seg in enumerate(segments):
+        current_text = seg.text
+        
+        if i == 0:
+            deduplicated.append(seg)
+            prev_text = current_text
+            continue
+        
+        # Split into words
+        prev_words = prev_text.split()
+        curr_words = current_text.split()
+        
+        if len(prev_words) < min_overlap_words or len(curr_words) < min_overlap_words:
+            deduplicated.append(seg)
+            prev_text = current_text
+            continue
+        
+        # Find longest overlap: prev_suffix == curr_prefix
+        max_overlap = 0
+        max_check = min(len(prev_words), len(curr_words) // 2)
+        
+        for overlap_len in range(min_overlap_words, max_check + 1):
+            prev_suffix = ' '.join(prev_words[-overlap_len:])
+            curr_prefix = ' '.join(curr_words[:overlap_len])
+            
+            if prev_suffix == curr_prefix:
+                max_overlap = overlap_len
+        
+        if max_overlap > 0:
+            # Remove overlap from current
+            new_text = ' '.join(curr_words[max_overlap:])
+            new_seg = SubtitleSegment(
+                start_time=seg.start_time,
+                end_time=seg.end_time,
+                text=new_text,
+                index=seg.index
+            )
+            deduplicated.append(new_seg)
+            prev_text = current_text
+        else:
+            deduplicated.append(seg)
+            prev_text = current_text
+    
+    return deduplicated
+
+
 def parse_srt_file(srt_path: Path) -> List[SubtitleSegment]:
     """Parse SRT subtitle file
     
@@ -859,7 +927,9 @@ def segment_audio(
     quality_config: Optional[dict] = None,
     report_quality: bool = True,
     speaker_id: int = 0,
-    segment_start_idx: int = 0
+    segment_start_idx: int = 0,
+    enable_text_dedup: bool = True,
+    min_overlap_words: int = 3
 ) -> Tuple[List[dict], Dict, int]:
     """Segment audio file according to subtitles
     
@@ -882,6 +952,10 @@ def segment_audio(
         segments = parse_vtt_file(subtitle_path)
     else:
         raise ValueError(f"Unsupported subtitle format: {subtitle_path.suffix}")
+    
+    # Deduplicate overlapping text (common in rolling subtitles)
+    if enable_text_dedup:
+        segments = deduplicate_subtitle_text(segments, min_overlap_words=min_overlap_words)
     
     # Load audio
     audio, sr = librosa.load(audio_path, sr=24000, mono=True)
@@ -1023,7 +1097,9 @@ def process_directory(
     subtitle_exts: List[str] = None,
     quality_config: Optional[dict] = None,
     report_quality: bool = True,
-    single_speaker: bool = False
+    single_speaker: bool = False,
+    enable_text_dedup: bool = True,
+    min_overlap_words: int = 3
 ) -> Tuple[List[dict], Dict]:
     """Process all audio/subtitle pairs in a directory
     
@@ -1103,7 +1179,9 @@ def process_directory(
                 quality_config=quality_config,
                 report_quality=report_quality,
                 speaker_id=current_speaker_id,
-                segment_start_idx=global_segment_counter
+                segment_start_idx=global_segment_counter,
+                enable_text_dedup=enable_text_dedup,
+                min_overlap_words=min_overlap_words
             )
             
             # Update counters
@@ -1250,6 +1328,19 @@ def parse_args():
         help="Disable VAD, use margin-based approach only"
     )
     
+    parser.add_argument(
+        "--no-text-dedup",
+        action="store_true",
+        help="Disable text deduplication (keep overlapping text from subtitles)"
+    )
+    
+    parser.add_argument(
+        "--min-overlap-words",
+        type=int,
+        default=3,
+        help="Minimum words required to detect text overlap (default: 3)"
+    )
+    
     return parser.parse_args()
 
 
@@ -1294,7 +1385,9 @@ def main():
         normalizer,
         quality_config=quality_config,
         report_quality=not args.no_quality_check,
-        single_speaker=args.single_speaker
+        single_speaker=args.single_speaker,
+        enable_text_dedup=not args.no_text_dedup,
+        min_overlap_words=args.min_overlap_words
     )
     
     # Write manifest
