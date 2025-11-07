@@ -261,6 +261,20 @@ print(torch.cuda.is_available())
 - Some videos may have download restrictions
 - Try updating yt-dlp: `pip install -U yt-dlp`
 
+### Subtitle Files Not Detected
+
+**Symptom:** "Warning: No subtitle found for video.wav"
+
+**Cause:** yt-dlp downloads subtitles with language codes (e.g., `video.am.srt`, `video.en.srt`)
+
+**Solution:** The dataset creator now automatically searches for subtitles with language codes. Supported patterns:
+- `video.srt` (exact match)
+- `video.am.srt` (Amharic)
+- `video.en.srt` (English)
+- `video.amh.vtt` (Amharic VTT)
+
+If still not detected, manually rename subtitle files to match audio filenames exactly.
+
 ### Out of Memory
 
 **Symptom:** Preprocessing crashes with CUDA OOM

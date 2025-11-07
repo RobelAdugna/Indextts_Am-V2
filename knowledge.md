@@ -138,6 +138,15 @@ bash scripts/LANGUAGE/end_to_end.sh
 
 ## Common Issues & Solutions
 
+### Subtitle Detection Issues
+**Problem:** Dataset creator can't find subtitle files for downloaded videos
+**Cause:** yt-dlp adds language codes to subtitle filenames (e.g., `video.am.srt`)
+**Solution:** The `create_amharic_dataset.py` tool now searches for:
+- Exact match: `video.srt`
+- Language codes: `video.am.srt`, `video.en.srt`, `video.amh.vtt`
+
+If issues persist, check the actual filenames in the download directory.
+
 ### Out of Memory
 - Reduce `--batch-size`
 - Increase `--grad-accumulation`

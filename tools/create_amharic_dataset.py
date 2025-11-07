@@ -407,11 +407,26 @@ def process_directory(
     for audio_file in audio_files:
         # Find matching subtitle
         subtitle_file = None
+        
+        # Try exact match first
         for ext in subtitle_exts:
             candidate = audio_file.with_suffix(ext)
             if candidate.exists():
                 subtitle_file = candidate
                 break
+        
+        # Try with language codes (e.g., video.am.srt, video.en.srt)
+        if not subtitle_file:
+            lang_codes = ['am', 'amh', 'en', 'en-US', 'en-GB']
+            for lang_code in lang_codes:
+                for ext in subtitle_exts:
+                    # Try patterns like: video.am.srt, video.en.vtt
+                    candidate = audio_file.parent / f"{audio_file.stem}.{lang_code}{ext}"
+                    if candidate.exists():
+                        subtitle_file = candidate
+                        break
+                if subtitle_file:
+                    break
         
         if not subtitle_file:
             print(f"Warning: No subtitle found for {audio_file.name}")
