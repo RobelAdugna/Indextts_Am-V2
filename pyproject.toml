@@ -24,6 +24,7 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
+    "webrtcvad>=2.0.10",
   # IMPORTANT: Always run `uv lock` or `uv lock --upgrade` to resolve dependencies
   # and update the lockfile after editing anything below.
   # WARNING: Ensure that you don't have a local `uv.toml` which overrides PyPI

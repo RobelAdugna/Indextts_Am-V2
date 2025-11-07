@@ -20,6 +20,14 @@ import numpy as np
 import soundfile as sf
 from tqdm import tqdm
 
+try:
+    import webrtcvad
+    VAD_AVAILABLE = True
+except ImportError:
+    VAD_AVAILABLE = False
+    print("Warning: webrtcvad not installed. Falling back to margin-based segmentation.")
+    print("Install with: pip install webrtcvad")
+
 from indextts.utils.front import TextNormalizer
 
 
@@ -240,6 +248,121 @@ def detect_clipping(audio: np.ndarray, threshold: float = 0.99) -> float:
     """
     clipped = np.abs(audio) >= threshold
     return np.sum(clipped) / len(audio)
+
+
+def detect_speech_with_vad(
+    audio: np.ndarray,
+    sr: int,
+    aggressiveness: int = 2,
+    frame_duration_ms: int = 30
+) -> List[Tuple[float, float]]:
+    """Use WebRTC VAD to detect speech regions
+    
+    Args:
+        audio: Audio signal (mono)
+        sr: Sample rate (must be 8000, 16000, 24000, or 48000)
+        aggressiveness: VAD aggressiveness (0-3, higher = stricter)
+        frame_duration_ms: Frame duration (10, 20, or 30 ms)
+    
+    Returns:
+        List of (start_time, end_time) tuples for speech regions
+    """
+    if not VAD_AVAILABLE:
+        return []
+    
+    try:
+        vad = webrtcvad.Vad(aggressiveness)
+    except Exception as e:
+        # VAD initialization failed
+        return []
+    
+    # Resample to 16kHz for VAD (requirement)
+    if sr != 16000:
+        audio_16k = librosa.resample(audio, orig_sr=sr, target_sr=16000)
+    else:
+        audio_16k = audio
+    
+    # Convert to 16-bit PCM
+    audio_int16 = (audio_16k * 32768).astype(np.int16)
+    
+    # Frame parameters
+    frame_samples = int(16000 * frame_duration_ms / 1000)
+    
+    # Process frames
+    speech_frames = []
+    for i in range(0, len(audio_int16) - frame_samples, frame_samples):
+        frame = audio_int16[i:i+frame_samples].tobytes()
+        is_speech = vad.is_speech(frame, 16000)
+        speech_frames.append((i / 16000, is_speech))
+    
+    # Merge consecutive speech frames into regions
+    regions = []
+    current_start = None
+    
+    for time, is_speech in speech_frames:
+        if is_speech:
+            if current_start is None:
+                current_start = time
+        else:
+            if current_start is not None:
+                regions.append((current_start, time))
+                current_start = None
+    
+    # Close final region
+    if current_start is not None:
+        regions.append((current_start, len(audio_16k) / 16000))
+    
+    return regions
+
+
+def find_best_boundary_with_vad(
+    audio: np.ndarray,
+    sr: int,
+    target_time: float,
+    search_window: float = 0.3,
+    is_start: bool = True
+) -> Optional[float]:
+    """Find best boundary using VAD
+    
+    Args:
+        audio: Full audio array
+        sr: Sample rate
+        target_time: Target boundary time
+        search_window: How far to search
+        is_start: True for start boundary, False for end
+    
+    Returns:
+        Refined boundary time or None if VAD unavailable
+    """
+    # Extract search region
+    search_start = max(0, target_time - search_window)
+    search_end = min(len(audio) / sr, target_time + search_window)
+    
+    start_sample = int(search_start * sr)
+    end_sample = int(search_end * sr)
+    search_audio = audio[start_sample:end_sample]
+    
+    # Get speech regions
+    regions = detect_speech_with_vad(search_audio, sr)
+    
+    if not regions:
+        return None
+    
+    # Find closest speech boundary
+    if is_start:
+        # For start: find first speech region's start
+        for region_start, region_end in regions:
+            absolute_start = search_start + region_start
+            if absolute_start <= target_time + search_window:
+                return absolute_start
+    else:
+        # For end: find last speech region's end
+        for region_start, region_end in reversed(regions):
+            absolute_end = search_start + region_end
+            if absolute_end >= target_time - search_window:
+                return absolute_end
+    
+    return None
 
 
 def assess_segment_quality(
@@ -619,6 +742,112 @@ def refine_segment_boundaries(
     return new_start, new_end, confidence
 
 
+def refine_segment_boundaries_v2(
+    audio: np.ndarray,
+    sr: int,
+    start_time: float,
+    end_time: float,
+    prev_end_time: Optional[float] = None,
+    next_start_time: Optional[float] = None,
+    use_vad: bool = True,
+    fallback_start_margin: float = 0.15,
+    fallback_end_margin: float = 0.1
+) -> Tuple[float, float, Dict[str, any]]:
+    """Refine boundaries with hard constraints to prevent overlap
+    
+    Args:
+        audio: Full audio array
+        sr: Sample rate
+        start_time: Subtitle start time
+        end_time: Subtitle end time
+        prev_end_time: Previous subtitle's end time (for boundary enforcement)
+        next_start_time: Next subtitle's start time (for boundary enforcement)
+        use_vad: Use VAD for speech detection
+        fallback_start_margin: Safety margin if VAD unavailable
+        fallback_end_margin: Safety margin if VAD unavailable
+    
+    Returns:
+        (refined_start, refined_end, metadata_dict)
+    """
+    metadata = {
+        'method': 'none',
+        'vad_used': False,
+        'constrained': False,
+        'start_margin': 0.0,
+        'end_margin': 0.0
+    }
+    
+    # Calculate hard boundaries (absolute limits)
+    # Never extend beyond midpoint to adjacent subtitle
+    hard_start_limit = 0.0  # Can't go before audio start
+    hard_end_limit = len(audio) / sr  # Can't go beyond audio end
+    
+    if prev_end_time is not None:
+        # Midpoint between previous end and current start
+        midpoint = (prev_end_time + start_time) / 2.0
+        hard_start_limit = max(hard_start_limit, midpoint)
+        metadata['constrained'] = True
+    
+    if next_start_time is not None:
+        # Midpoint between current end and next start
+        midpoint = (end_time + next_start_time) / 2.0
+        hard_end_limit = min(hard_end_limit, midpoint)
+        metadata['constrained'] = True
+    
+    # Try VAD first
+    refined_start = start_time
+    refined_end = end_time
+    
+    if use_vad:
+        try:
+            vad_start = find_best_boundary_with_vad(
+                audio, sr, start_time, search_window=0.3, is_start=True
+            )
+            vad_end = find_best_boundary_with_vad(
+                audio, sr, end_time, search_window=0.3, is_start=False
+            )
+            
+            if vad_start is not None:
+                refined_start = vad_start
+                metadata['vad_used'] = True
+                metadata['method'] = 'vad'
+            
+            if vad_end is not None:
+                refined_end = vad_end
+                metadata['vad_used'] = True
+                metadata['method'] = 'vad'
+        except:
+            pass  # Fall back to margin-based
+    
+    # If VAD didn't work, use safety margins
+    if metadata['method'] == 'none':
+        # Calculate safe margins respecting hard limits
+        available_before = start_time - hard_start_limit
+        available_after = hard_end_limit - end_time
+        
+        actual_start_margin = min(fallback_start_margin, available_before)
+        actual_end_margin = min(fallback_end_margin, available_after)
+        
+        refined_start = start_time - actual_start_margin
+        refined_end = end_time + actual_end_margin
+        
+        metadata['method'] = 'margin'
+        metadata['start_margin'] = actual_start_margin
+        metadata['end_margin'] = actual_end_margin
+    
+    # HARD ENFORCEMENT: Never cross boundaries
+    refined_start = max(hard_start_limit, min(refined_start, start_time))
+    refined_end = min(hard_end_limit, max(refined_end, end_time))
+    
+    # Sanity check
+    if refined_end <= refined_start:
+        refined_start = start_time
+        refined_end = end_time
+        metadata['method'] = 'fallback_exact'
+    
+    return refined_start, refined_end, metadata
+
+
 def segment_audio(
     audio_path: Path,
     subtitle_path: Path,
@@ -685,7 +914,7 @@ def segment_audio(
     
     segment_counter = segment_start_idx
     
-    for seg in tqdm(segments, desc=f"Processing {audio_path.name}"):
+    for idx, seg in enumerate(tqdm(segments, desc=f"Processing {audio_path.name}")):
         quality_stats['total_segments'] += 1
         
         # Check duration
@@ -713,14 +942,24 @@ def segment_audio(
             quality_stats['rejection_reasons']['empty_after_normalization'] += 1
             continue
         
-        # Refine boundaries if requested
+        # Get adjacent subtitle times for hard boundary enforcement
+        prev_end_time = segments[idx - 1].end_time if idx > 0 else None
+        next_start_time = segments[idx + 1].start_time if idx < len(segments) - 1 else None
+        
+        # Refine boundaries with hard constraints
         start_time = seg.start_time
         end_time = seg.end_time
-        confidence = 1.0
+        boundary_metadata = {}
         
         if refine_boundaries:
-            start_time, end_time, confidence = refine_segment_boundaries(
-                audio, sr, start_time, end_time
+            start_time, end_time, boundary_metadata = refine_segment_boundaries_v2(
+                audio, sr, 
+                seg.start_time, seg.end_time,
+                prev_end_time=prev_end_time,
+                next_start_time=next_start_time,
+                use_vad=True,
+                fallback_start_margin=0.15,
+                fallback_end_margin=0.1
             )
         
         # Extract audio segment
@@ -763,9 +1002,12 @@ def segment_audio(
             entry["quality"] = {
                 "snr": float(quality.snr),
                 "speech_rate": float(quality.speech_rate),
-                "amharic_ratio": float(quality.amharic_ratio),
-                "boundary_confidence": float(confidence)
+                "amharic_ratio": float(quality.amharic_ratio)
             }
+        
+        # Always include boundary metadata for debugging
+        if boundary_metadata:
+            entry["boundary_info"] = boundary_metadata
         
         entries.append(entry)
         quality_stats['accepted'] += 1
@@ -993,6 +1235,19 @@ def parse_args():
         type=float,
         default=0.1,
         help="Safety margin after subtitle end in seconds (default: 0.1)"
+    )
+    
+    parser.add_argument(
+        "--use-vad",
+        action="store_true",
+        default=True,
+        help="Use WebRTC VAD for speech detection (recommended)"
+    )
+    
+    parser.add_argument(
+        "--no-vad",
+        action="store_true",
+        help="Disable VAD, use margin-based approach only"
     )
     
     return parser.parse_args()

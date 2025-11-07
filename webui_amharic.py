@@ -175,6 +175,7 @@ def create_dataset(
     min_duration: float,
     max_duration: float,
     refine_boundaries: bool,
+    use_vad: bool,
     start_margin: float,
     end_margin: float,
     enable_quality_filter: bool,
@@ -220,6 +221,10 @@ def create_dataset(
     if not refine_boundaries:
         cmd.append("--no-refine")
     else:
+        # Add VAD flag
+        if not use_vad:
+            cmd.append("--no-vad")
+        
         # Add safety margins
         cmd.extend(["--start-margin", str(start_margin)])
         cmd.extend(["--end-margin", str(end_margin)])
@@ -815,7 +820,13 @@ def create_ui():
                     refine_boundaries = gr.Checkbox(
                         label="Enable boundary refinement",
                         value=True,
-                        info="Adds safety margins + trims sustained silence"
+                        info="Uses VAD or safety margins to prevent speech cutoff"
+                    )
+                    
+                    use_vad = gr.Checkbox(
+                        label="Use VAD (Voice Activity Detection)",
+                        value=True,
+                        info="Recommended: Detects actual speech boundaries. Requires webrtcvad package."
                     )
                     
                     with gr.Row():
@@ -929,6 +940,7 @@ def create_ui():
                     min_duration, 
                     max_duration, 
                     refine_boundaries,
+                    use_vad,
                     start_margin,
                     end_margin,
                     enable_quality_filter,

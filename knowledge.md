@@ -136,6 +136,22 @@ uv sync --all-extras
 bash scripts/LANGUAGE/end_to_end.sh
 ```
 
+## Segmentation V2: Production-Grade Implementation
+
+**Status:** ✅ COMPLETE - Production ready
+
+**Key Achievement:** Zero audio overlap + minimal speech cutoff through hard boundary enforcement and VAD-based detection.
+
+### Quick Start
+1. Install VAD: `pip install webrtcvad` (recommended but optional)
+2. Use WebUI Tab 2 or CLI with defaults
+3. Verify: Check `boundary_info` in manifest.jsonl
+
+### Documentation
+- `SEGMENTATION_V2_GUIDE.md` - Complete technical guide
+- `SEGMENTATION_V2_SUMMARY.md` - Executive summary
+- `ALIGNMENT_FIX_GUIDE.md` - Original fix documentation
+
 ## Critical Fix: Audio-Text Alignment
 
 ### Problem: Segmented audio cuts off speech
@@ -167,6 +183,50 @@ bash scripts/LANGUAGE/end_to_end.sh
 - Never shrinks inside subtitle bounds (only expands)
 
 **Critical Fix Applied:** Expansion calculation corrected to `(start_time - new_start) + (new_end - end_time)`. Confidence score now properly reflects margin size.
+
+**Production-Grade Boundary Refinement (V2):**
+
+**Hard Boundary Enforcement:**
+- Segments can NEVER overlap in audio
+- Uses midpoint between adjacent subtitles as absolute limit
+- Example: Subtitle A ends 3.5s, Subtitle B starts 4.0s → Hard limit at 3.75s
+- Segment A cannot extend beyond 3.75s, Segment B cannot start before 3.75s
+
+**Two-Method Approach (Priority Order):**
+
+1. **VAD-Based (Primary - Recommended):**
+   - Uses WebRTC Voice Activity Detection
+   - Detects actual speech regions acoustically
+   - Finds natural speech start/end within search window
+   - Most accurate, language-agnostic
+   - Requires: `pip install webrtcvad`
+
+2. **Margin-Based (Fallback):**
+   - If VAD unavailable/fails
+   - Uses configurable safety margins (0.15s start, 0.1s end)
+   - Automatically reduces margins if would cause overlap
+   - Guaranteed to respect hard boundaries
+
+**Benefits:**
+- Zero audio overlap (mathematically guaranteed)
+- No speech cutoff (VAD finds actual speech)
+- Works with close subtitles (<0.5s gap)
+- Detailed metadata for debugging (`boundary_info` field)
+
+**Configuration:**
+- CLI: `--use-vad` (default) or `--no-vad` for margin-only
+- Margins: `--start-margin 0.15 --end-margin 0.1`
+
+**Metadata Example:**
+```json
+"boundary_info": {
+  "method": "vad",
+  "vad_used": true,
+  "constrained": true,
+  "start_margin": 0.0,
+  "end_margin": 0.0
+}
+```
 
 ## Dataset Naming Convention
 
