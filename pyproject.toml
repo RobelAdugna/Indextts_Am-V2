@@ -24,6 +24,7 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
+    "numpy<2",
     "webrtcvad>=2.0.10",
     "audio-separator[cpu]>=0.18.0",
   # IMPORTANT: Always run `uv lock` or `uv lock --upgrade` to resolve dependencies

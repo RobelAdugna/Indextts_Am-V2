@@ -148,7 +148,7 @@ bash scripts/LANGUAGE/end_to_end.sh
 **Feature:** Remove music/instruments from downloaded files before dataset creation
 **Library:** audio-separator (UVR backend)
 **Models:** MDX-Net (fast), Demucs (balanced), Demucs FT (slow/best)
-**Install:** `pip install audio-separator[cpu]`
+**Install:** `pip install audio-separator` (or with quotes: `pip install 'audio-separator[cpu]'` for zsh)
 **Location:** Tab 1 accordion "Remove Background Music"
 **Recommended:** MDX-Net for large batches (8/10 quality, very fast)
 
@@ -331,6 +331,11 @@ python tools/create_amharic_dataset.py \
   --min-words 5 \
   --quality-report quality.json
 ```
+
+### NumPy 2.x Compatibility Error
+**Error:** `ImportError: A module that was compiled using NumPy 1.x cannot be run in NumPy 2.3.4`
+**Fix:** `pip install 'numpy<2'`
+**Added to pyproject.toml:** numpy<2 constraint
 
 ### Out of Memory
 - Reduce `--batch-size`

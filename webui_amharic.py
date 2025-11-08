@@ -98,7 +98,9 @@ def remove_background_music(
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
         
-        audio_files = list(input_path.glob('*.wav')) + list(input_path.glob('*.mp3'))
+        audio_files = []
+        for ext in ['*.wav', '*.mp3', '*.flac', '*.m4a', '*.ogg', '*.opus']:
+            audio_files.extend(list(input_path.glob(ext)))
         if not audio_files:
             return "No audio files found", "warning"
         
