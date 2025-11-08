@@ -83,6 +83,110 @@ def format_status_html(status: str, success: bool = True) -> str:
 # Tab 1: YouTube Downloader
 # ============================================================================
 
+def analyze_dataset_stats(
+    manifest_path: str,
+    progress=gr.Progress()
+) -> Tuple[str, str]:
+    """Analyze dataset statistics from manifest.jsonl"""
+    try:
+        manifest = Path(manifest_path)
+        if not manifest.exists():
+            return "Manifest file not found", "error"
+        
+        progress(0, desc="Reading manifest...")
+        
+        # Parse manifest
+        segments = []
+        with open(manifest, 'r', encoding='utf-8') as f:
+            for line in f:
+                if line.strip():
+                    segments.append(json.loads(line))
+        
+        if not segments:
+            return "No data in manifest", "warning"
+        
+        progress(0.3, desc="Calculating statistics...")
+        
+        # Calculate stats
+        total_segments = len(segments)
+        total_duration = sum(s.get('duration', 0) for s in segments)
+        total_hours = total_duration / 3600
+        total_minutes = total_duration / 60
+        
+        # Unique sources (videos)
+        unique_sources = set(s.get('source_file', 'unknown') for s in segments)
+        num_videos = len(unique_sources)
+        
+        # Speakers
+        unique_speakers = set(s.get('speaker', 'unknown') for s in segments)
+        num_speakers = len(unique_speakers)
+        
+        # Language distribution
+        lang_counts = {}
+        for s in segments:
+            lang = s.get('language', 'unknown')
+            lang_counts[lang] = lang_counts.get(lang, 0) + 1
+        
+        # Duration distribution
+        durations = [s.get('duration', 0) for s in segments]
+        avg_duration = total_duration / total_segments if total_segments > 0 else 0
+        min_duration = min(durations) if durations else 0
+        max_duration = max(durations) if durations else 0
+        
+        # Text statistics
+        total_words = 0
+        total_chars = 0
+        for s in segments:
+            text = s.get('text', '')
+            total_words += len(text.split())
+            total_chars += len(text)
+        
+        avg_words = total_words / total_segments if total_segments > 0 else 0
+        avg_chars = total_chars / total_segments if total_segments > 0 else 0
+        
+        # Build report
+        report = f"""📊 **Dataset Statistics**
+
+### 🎯 Overview
+- **Total Segments:** {total_segments:,}
+- **Total Duration:** {total_hours:.2f} hours ({total_minutes:.1f} minutes)
+- **Source Videos:** {num_videos}
+- **Unique Speakers:** {num_speakers}
+
+### ⏱️ Duration Statistics
+- **Average Segment:** {avg_duration:.2f}s
+- **Shortest Segment:** {min_duration:.2f}s
+- **Longest Segment:** {max_duration:.2f}s
+
+### 📝 Text Statistics
+- **Total Words:** {total_words:,}
+- **Total Characters:** {total_chars:,}
+- **Avg Words/Segment:** {avg_words:.1f}
+- **Avg Chars/Segment:** {avg_chars:.1f}
+
+### 🌍 Language Distribution
+"""
+        
+        for lang, count in sorted(lang_counts.items(), key=lambda x: x[1], reverse=True):
+            pct = (count / total_segments) * 100
+            report += f"- **{lang}:** {count:,} segments ({pct:.1f}%)\n"
+        
+        # Top sources
+        source_counts = {}
+        for s in segments:
+            src = s.get('source_file', 'unknown')
+            source_counts[src] = source_counts.get(src, 0) + 1
+        
+        report += "\n### 📹 Top Source Files\n"
+        for src, count in sorted(source_counts.items(), key=lambda x: x[1], reverse=True)[:10]:
+            report += f"- {src}: {count:,} segments\n"
+        
+        return report, "success"
+    
+    except Exception as e:
+        return f"❌ Error: {str(e)}", "error"
+
+
 def remove_background_music(
     input_dir: str,
     output_dir: str,
@@ -106,11 +210,10 @@ def remove_background_music(
         
         progress(0, desc="Initializing...")
         separator = Separator(
-            model_name=model_name,
             output_dir=str(output_path),
             output_format='WAV'
         )
-        separator.load_model()
+        separator.load_model(model_filename=model_name)
         
         logs = []
         for i, f in enumerate(audio_files):
@@ -869,6 +972,19 @@ def create_ui():
             and text quality (Amharic script validation, word count, speech rate). Optimized defaults for Amharic.
             """)
             
+            with gr.Accordion("📊 Dataset Statistics", open=False):
+                gr.Markdown("**Analyze your dataset:** Get comprehensive stats about segments, duration, speakers, and more.")
+                
+                stats_manifest_path = gr.Textbox(
+                    label="Manifest Path",
+                    placeholder="amharic_dataset/manifest.jsonl",
+                    value="amharic_dataset/manifest.jsonl"
+                )
+                
+                analyze_stats_btn = gr.Button("📊 Analyze Dataset", variant="secondary")
+                stats_output = gr.Markdown(label="Statistics")
+                stats_status = gr.Textbox(label="Status", visible=False)
+            
             with gr.Row():
                 with gr.Column():
                     input_dir_dataset = gr.Textbox(
@@ -1025,6 +1141,12 @@ def create_ui():
                 lambda s: s.get("downloads_dir", ""),
                 inputs=[state],
                 outputs=[input_dir_dataset]
+            )
+            
+            analyze_stats_btn.click(
+                analyze_dataset_stats,
+                inputs=[stats_manifest_path],
+                outputs=[stats_output, stats_status]
             )
             
             create_dataset_btn.click(

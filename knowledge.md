@@ -136,6 +136,21 @@ uv sync --all-extras
 bash scripts/LANGUAGE/end_to_end.sh
 ```
 
+## Dataset Statistics
+
+**Feature:** Comprehensive analysis of your dataset manifest
+**Location:** Tab 2 accordion "Dataset Statistics"
+**Analyzes:**
+- Total segments, duration (hours/minutes)
+- Number of source videos processed
+- Unique speakers
+- Duration stats (avg/min/max per segment)
+- Text stats (words, characters)
+- Language distribution
+- Top 10 source files by segment count
+
+**Usage:** Enter manifest path (e.g., `amharic_dataset/manifest.jsonl`) and click "Analyze Dataset"
+
 ## WebUI Defaults (Amharic-Optimized)
 
 **Safety Margins:** Start=0.2s, End=0.15s (conservative for YouTube content)
