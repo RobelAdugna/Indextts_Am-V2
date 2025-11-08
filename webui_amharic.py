@@ -208,14 +208,25 @@ def remove_background_music(
         if not audio_files:
             return "No audio files found", "warning"
         
+        logs = []
         progress(0, desc="Initializing...")
+        
+        # Enable GPU if available
+        import torch
+        use_cuda = torch.cuda.is_available()
+        
         separator = Separator(
             output_dir=str(output_path),
-            output_format='WAV'
+            output_format='WAV',
+            use_cuda=use_cuda,
+            normalization_enabled=True
         )
         separator.load_model(model_filename=model_name)
         
-        logs = []
+        if use_cuda:
+            logs.append(f"🚀 GPU acceleration enabled (CUDA)")
+        else:
+            logs.append(f"⚠️ Running on CPU (slower)")
         for i, f in enumerate(audio_files):
             progress((i+1)/len(audio_files), desc=f.name)
             try:

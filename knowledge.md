@@ -163,7 +163,9 @@ bash scripts/LANGUAGE/end_to_end.sh
 **Feature:** Remove music/instruments from downloaded files before dataset creation
 **Library:** audio-separator (UVR backend)
 **Models:** MDX-Net (fast), Demucs (balanced), Demucs FT (slow/best)
-**Install:** `pip install audio-separator` (or with quotes: `pip install 'audio-separator[cpu]'` for zsh)
+**Install:** `pip install audio-separator` (auto-detects GPU/CPU)
+**GPU:** Install base package only (not `[cpu]` extra)
+**CPU:** Use `pip install 'audio-separator[cpu]'` to force CPU
 **Location:** Tab 1 accordion "Remove Background Music"
 **Recommended:** MDX-Net for large batches (8/10 quality, very fast)
 
@@ -346,6 +348,11 @@ python tools/create_amharic_dataset.py \
   --min-words 5 \
   --quality-report quality.json
 ```
+
+### Music Removal GPU Acceleration
+**Issue:** audio-separator using CPU despite GPU available
+**Fix:** `use_cuda=True` parameter in Separator() enables GPU
+**Note:** Base package auto-detects CUDA. Don't use `[cpu]` extra.
 
 ### NumPy 2.x Compatibility Error
 **Error:** `ImportError: A module that was compiled using NumPy 1.x cannot be run in NumPy 2.3.4`
