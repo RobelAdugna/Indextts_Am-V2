@@ -351,8 +351,8 @@ python tools/create_amharic_dataset.py \
 
 ### Music Removal GPU Acceleration
 **Issue:** audio-separator using CPU despite GPU available
-**Fix:** `use_cuda=True` parameter in Separator() enables GPU
-**Note:** Base package auto-detects CUDA. Don't use `[cpu]` extra.
+**Fix:** Newer versions (>=0.20.0) auto-detect CUDA. Remove `use_cuda=` parameter.
+**Note:** Install base package without `[cpu]` extra for GPU support.
 
 ### NumPy 2.x Compatibility Error
 **Error:** `ImportError: A module that was compiled using NumPy 1.x cannot be run in NumPy 2.3.4`

@@ -211,20 +211,19 @@ def remove_background_music(
         logs = []
         progress(0, desc="Initializing...")
         
-        # Enable GPU if available
+        # Enable GPU if available (audio-separator auto-detects CUDA)
         import torch
         use_cuda = torch.cuda.is_available()
         
         separator = Separator(
             output_dir=str(output_path),
             output_format='WAV',
-            use_cuda=use_cuda,
             normalization_enabled=True
         )
         separator.load_model(model_filename=model_name)
         
         if use_cuda:
-            logs.append(f"🚀 GPU acceleration enabled (CUDA)")
+            logs.append(f"🚀 GPU detected - audio-separator will auto-use CUDA")
         else:
             logs.append(f"⚠️ Running on CPU (slower)")
         for i, f in enumerate(audio_files):
