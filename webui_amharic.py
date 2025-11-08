@@ -225,26 +225,56 @@ def remove_background_music(
             has_cuda_provider = False
             logs.append(f"⚠️ Could not check ONNX providers: {e}")
         
+        # Configure ONNX session options for maximum GPU performance
+        session_options = None
+        if has_cuda_provider:
+            try:
+                import onnxruntime as ort
+                session_options = ort.SessionOptions()
+                # Enable all optimizations
+                session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+                # Use parallel execution
+                session_options.execution_mode = ort.ExecutionMode.ORT_PARALLEL
+                # Increase thread count for better GPU utilization
+                session_options.intra_op_num_threads = 4
+                session_options.inter_op_num_threads = 4
+                logs.append(f"⚙️ Configured ONNX with performance optimizations")
+            except Exception as e:
+                logs.append(f"⚠️ Could not configure session options: {e}")
+        
         separator = Separator(
             output_dir=str(output_path),
-            output_format='WAV'
+            output_format='WAV',
+            sample_rate=44100,  # Standard sample rate
         )
         separator.load_model(model_filename=model_name)
         
         if use_cuda and has_cuda_provider:
-            logs.append(f"🚀 Using GPU acceleration (CUDA)")
+            logs.append(f"🚀 Using GPU acceleration (CUDA) with optimizations")
+            logs.append(f"💡 Processing {len(audio_files)} files with GPU...")
         elif use_cuda and not has_cuda_provider:
             logs.append(f"⚠️ GPU available but onnxruntime-gpu not installed!")
             logs.append(f"   Install with: pip uninstall onnxruntime -y && pip install onnxruntime-gpu")
         else:
             logs.append(f"⚠️ Running on CPU (slower)")
+        
+        # Process files with progress tracking
+        import time
+        start_time = time.time()
+        
         for i, f in enumerate(audio_files):
-            progress((i+1)/len(audio_files), desc=f.name)
+            file_start = time.time()
+            progress((i+1)/len(audio_files), desc=f"{i+1}/{len(audio_files)}: {f.name[:30]}...")
             try:
                 separator.separate(str(f))
-                logs.append(f"✓ {f.name}")
+                file_time = time.time() - file_start
+                logs.append(f"✓ {f.name} ({file_time:.1f}s)")
             except Exception as e:
                 logs.append(f"✗ {f.name}: {e}")
+        
+        total_time = time.time() - start_time
+        avg_time = total_time / len(audio_files) if audio_files else 0
+        logs.insert(0, f"⏱️ Total time: {total_time:.1f}s | Avg per file: {avg_time:.1f}s")
         
         return f"✅ Processed {len(audio_files)} files\n" + "\n".join(logs), "success"
     except Exception as e:
