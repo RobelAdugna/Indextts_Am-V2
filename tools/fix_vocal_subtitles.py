@@ -14,7 +14,7 @@ import argparse
 import re
 import shutil
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 
 def find_subtitle_file(audio_stem: str, search_dir: Path) -> Optional[Path]:
