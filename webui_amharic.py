@@ -211,9 +211,19 @@ def remove_background_music(
         logs = []
         progress(0, desc="Initializing...")
         
-        # Enable GPU if available (audio-separator auto-detects CUDA)
+        # Check GPU availability
         import torch
         use_cuda = torch.cuda.is_available()
+        
+        # Check ONNX Runtime providers
+        try:
+            import onnxruntime as ort
+            providers = ort.get_available_providers()
+            has_cuda_provider = 'CUDAExecutionProvider' in providers
+            logs.append(f"📋 Available ONNX providers: {', '.join(providers)}")
+        except Exception as e:
+            has_cuda_provider = False
+            logs.append(f"⚠️ Could not check ONNX providers: {e}")
         
         separator = Separator(
             output_dir=str(output_path),
@@ -222,8 +232,11 @@ def remove_background_music(
         )
         separator.load_model(model_filename=model_name)
         
-        if use_cuda:
-            logs.append(f"🚀 GPU detected - audio-separator will auto-use CUDA")
+        if use_cuda and has_cuda_provider:
+            logs.append(f"🚀 Using GPU acceleration (CUDA)")
+        elif use_cuda and not has_cuda_provider:
+            logs.append(f"⚠️ GPU available but onnxruntime-gpu not installed!")
+            logs.append(f"   Install with: pip uninstall onnxruntime -y && pip install onnxruntime-gpu")
         else:
             logs.append(f"⚠️ Running on CPU (slower)")
         for i, f in enumerate(audio_files):
