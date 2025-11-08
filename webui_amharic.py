@@ -227,8 +227,7 @@ def remove_background_music(
         
         separator = Separator(
             output_dir=str(output_path),
-            output_format='WAV',
-            normalization_enabled=True
+            output_format='WAV'
         )
         separator.load_model(model_filename=model_name)
         
