@@ -169,6 +169,16 @@ bash scripts/LANGUAGE/end_to_end.sh
 **Location:** Tab 1 accordion "Remove Background Music"
 **Recommended:** MDX-Net for large batches (8/10 quality, very fast)
 
+### Subtitle Pairing for Separated Files
+
+**Problem:** After vocal separation, files are renamed (e.g., `video_(Vocals)_UVR_MDXNET.wav`) but subtitle files keep original names
+**Solution:** WebUI automatically copies subtitle files to match separated vocal filenames
+**Manual Fix:** For already-separated files, use:
+```bash
+python tools/fix_vocal_subtitles.py --vocal-dir amharic_vocals --original-dir amharic_downloads
+```
+**Dry Run:** Add `--dry-run` flag to preview without copying
+
 ## Text Deduplication
 
 **Problem:** SRT subtitles have rolling text (50% overlap between lines)

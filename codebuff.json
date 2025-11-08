@@ -1,0 +1,13 @@
+{
+  "description": "Template configuration for this project. See https://www.codebuff.com/config for all options.",
+  "startupProcesses": [
+    {
+      "name": "webui",
+      "command": "python webui_amharic.py",
+      "enabled": false,
+      "stdoutFile": "logs/webui.log"
+    }
+  ],
+  "fileChangeHooks": [],
+  "maxAgentSteps": 25
+}

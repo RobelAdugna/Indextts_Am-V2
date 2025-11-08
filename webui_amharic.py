@@ -15,6 +15,8 @@ Comprehensive interface for the complete Amharic TTS training pipeline:
 import argparse
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -193,7 +195,7 @@ def remove_background_music(
     model_name: str = "UVR_MDXNET_KARA_2.onnx",
     progress=gr.Progress()
 ) -> Tuple[str, str]:
-    """Remove background music from audio files"""
+    """Remove background music from audio files and copy subtitle files"""
     if not MUSIC_REMOVAL_AVAILABLE:
         return "❌ audio-separator not installed. Run: pip install 'audio-separator[cpu]'", "error"
     
@@ -261,6 +263,7 @@ def remove_background_music(
         # Process files with progress tracking
         import time
         start_time = time.time()
+        subtitle_stats = {'copied': 0, 'not_found': 0, 'errors': 0}
         
         for i, f in enumerate(audio_files):
             file_start = time.time()
@@ -269,12 +272,58 @@ def remove_background_music(
                 separator.separate(str(f))
                 file_time = time.time() - file_start
                 logs.append(f"✓ {f.name} ({file_time:.1f}s)")
+                
+                # Copy subtitle files for separated vocals
+                # audio-separator creates files like: filename_(Vocals)_UVR_MDXNET.wav
+                subtitle_exts = ['.srt', '.vtt', '.webvtt']
+                lang_codes = ['am', 'amh', 'en', 'en-US']
+                
+                # Find subtitle for original file
+                original_subtitle = None
+                for ext in subtitle_exts:
+                    # Try exact match
+                    candidate = f.with_suffix(ext)
+                    if candidate.exists():
+                        original_subtitle = candidate
+                        break
+                    # Try with language codes
+                    for lang in lang_codes:
+                        candidate = f.parent / f"{f.stem}.{lang}{ext}"
+                        if candidate.exists():
+                            original_subtitle = candidate
+                            break
+                    if original_subtitle:
+                        break
+                
+                if original_subtitle:
+                    # Find generated vocal files
+                    vocal_pattern = re.compile(rf'^{re.escape(f.stem)}_\(Vocals\).*\.wav$', re.IGNORECASE)
+                    for vocal_file in output_path.glob(f"{f.stem}*.wav"):
+                        if vocal_pattern.match(vocal_file.name):
+                            # Copy subtitle with matching name
+                            new_subtitle = vocal_file.with_suffix(original_subtitle.suffix)
+                            if not new_subtitle.exists():
+                                try:
+                                    shutil.copy2(original_subtitle, new_subtitle)
+                                    subtitle_stats['copied'] += 1
+                                    logs.append(f"  📄 Copied subtitle: {new_subtitle.name}")
+                                except Exception as e:
+                                    subtitle_stats['errors'] += 1
+                                    logs.append(f"  ⚠️ Subtitle copy failed: {e}")
+                else:
+                    subtitle_stats['not_found'] += 1
+                    logs.append(f"  ℹ️  No subtitle found for {f.name}")
+                    
             except Exception as e:
                 logs.append(f"✗ {f.name}: {e}")
         
         total_time = time.time() - start_time
         avg_time = total_time / len(audio_files) if audio_files else 0
         logs.insert(0, f"⏱️ Total time: {total_time:.1f}s | Avg per file: {avg_time:.1f}s")
+        
+        # Add subtitle stats
+        if subtitle_stats['copied'] > 0 or subtitle_stats['not_found'] > 0:
+            logs.append(f"\n📄 Subtitle files: {subtitle_stats['copied']} copied, {subtitle_stats['not_found']} not found, {subtitle_stats['errors']} errors")
         
         return f"✅ Processed {len(audio_files)} files\n" + "\n".join(logs), "success"
     except Exception as e:
