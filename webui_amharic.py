@@ -190,7 +190,7 @@ def analyze_dataset_stats(
 def remove_background_music(
     input_dir: str,
     output_dir: str,
-    model_name: str = "UVR-MDX-NET-Inst_HQ_3",
+    model_name: str = "UVR_MDXNET_KARA_2.onnx",
     progress=gr.Progress()
 ) -> Tuple[str, str]:
     """Remove background music from audio files"""
@@ -934,11 +934,11 @@ def create_ui():
                 music_model = gr.Radio(
                     label="Model",
                     choices=[
-                        ("MDX-Net (Fast, 8/10 quality)", "UVR-MDX-NET-Inst_HQ_3"),
+                        ("MDX-Net (Fast, 8/10 quality)", "UVR_MDXNET_KARA_2.onnx"),
                         ("Demucs (Balanced, 9/10 quality)", "htdemucs"),
                         ("Demucs FT (Slow, 9.5/10 quality)", "htdemucs_ft")
                     ],
-                    value="UVR-MDX-NET-Inst_HQ_3"
+                    value="UVR_MDXNET_KARA_2.onnx"
                 )
                 
                 remove_music_btn = gr.Button("🎵 Remove Music", variant="secondary")
