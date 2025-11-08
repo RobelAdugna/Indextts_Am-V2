@@ -148,13 +148,15 @@ def process_directory(
     }
     
     # Find all vocal files
-    vocal_pattern = r'_(Vocals|Instrumental)_UVR.*\.(wav|mp3|flac|m4a)$'
+    vocal_pattern = r'_(Vocals|Instrumental)_UVR'
     vocal_files = []
     
-    for ext in ['.wav', '.mp3', '.flac', '.m4a']:
+    for ext in ['.wav', '.mp3', '.flac', '.m4a', '.ogg']:
         for f in vocal_dir.glob(f"*{ext}"):
+            # Check if filename contains UVR marker (case-insensitive)
             if re.search(vocal_pattern, f.name, re.IGNORECASE):
                 vocal_files.append(f)
+                print(f"  Debug: Found vocal file: {f.name}")
     
     stats['total_vocals'] = len(vocal_files)
     
