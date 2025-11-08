@@ -24,6 +24,12 @@ from typing import Dict, List, Optional, Tuple
 
 import gradio as gr
 
+try:
+    from audio_separator.separator import Separator
+    MUSIC_REMOVAL_AVAILABLE = True
+except ImportError:
+    MUSIC_REMOVAL_AVAILABLE = False
+
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(current_dir)
 
@@ -76,6 +82,47 @@ def format_status_html(status: str, success: bool = True) -> str:
 # ============================================================================
 # Tab 1: YouTube Downloader
 # ============================================================================
+
+def remove_background_music(
+    input_dir: str,
+    output_dir: str,
+    model_name: str = "UVR-MDX-NET-Inst_HQ_3",
+    progress=gr.Progress()
+) -> Tuple[str, str]:
+    """Remove background music from audio files"""
+    if not MUSIC_REMOVAL_AVAILABLE:
+        return "❌ audio-separator not installed. Run: pip install 'audio-separator[cpu]'", "error"
+    
+    try:
+        input_path = Path(input_dir)
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        
+        audio_files = list(input_path.glob('*.wav')) + list(input_path.glob('*.mp3'))
+        if not audio_files:
+            return "No audio files found", "warning"
+        
+        progress(0, desc="Initializing...")
+        separator = Separator(
+            model_name=model_name,
+            output_dir=str(output_path),
+            output_format='WAV'
+        )
+        separator.load_model()
+        
+        logs = []
+        for i, f in enumerate(audio_files):
+            progress((i+1)/len(audio_files), desc=f.name)
+            try:
+                separator.separate(str(f))
+                logs.append(f"✓ {f.name}")
+            except Exception as e:
+                logs.append(f"✗ {f.name}: {e}")
+        
+        return f"✅ Processed {len(audio_files)} files\n" + "\n".join(logs), "success"
+    except Exception as e:
+        return f"❌ {e}", "error"
+
 
 def download_youtube_videos(
     url_input: str,
@@ -772,6 +819,30 @@ def create_ui():
                     download_status = gr.HTML("Ready to download")
                     download_logs = gr.Textbox(label="Logs", lines=15, max_lines=20)
             
+            with gr.Accordion("🎵 Remove Background Music (Optional)", open=False):
+                gr.Markdown("**Remove music before dataset creation.** Uses AI to extract vocals only.")
+                
+                with gr.Row():
+                    music_input_dir = gr.Textbox(label="Input (with music)", placeholder="amharic_downloads")
+                    music_output_dir = gr.Textbox(label="Output (vocals)", placeholder="amharic_vocals")
+                
+                music_model = gr.Radio(
+                    label="Model",
+                    choices=[
+                        ("MDX-Net (Fast, 8/10 quality)", "UVR-MDX-NET-Inst_HQ_3"),
+                        ("Demucs (Balanced, 9/10 quality)", "htdemucs"),
+                        ("Demucs FT (Slow, 9.5/10 quality)", "htdemucs_ft")
+                    ],
+                    value="UVR-MDX-NET-Inst_HQ_3"
+                )
+                
+                remove_music_btn = gr.Button("🎵 Remove Music", variant="secondary")
+                music_logs = gr.Textbox(label="Logs", lines=8)
+                music_status = gr.Textbox(label="Status")
+                
+                if not MUSIC_REMOVAL_AVAILABLE:
+                    gr.Markdown("⚠️ Install: `pip install audio-separator[cpu]`")
+            
             download_btn.click(
                 download_youtube_videos,
                 inputs=[url_input, url_file, output_dir_download, download_subtitles, subtitle_langs, audio_format],
@@ -780,6 +851,12 @@ def create_ui():
                 update_pipeline_status,
                 inputs=[state],
                 outputs=[pipeline_status]
+            )
+            
+            remove_music_btn.click(
+                remove_background_music,
+                inputs=[music_input_dir, music_output_dir, music_model],
+                outputs=[music_logs, music_status]
             )
         
         # Tab 2: Dataset Creation
@@ -838,7 +915,7 @@ def create_ui():
                             label="Start Safety Margin (seconds)",
                             minimum=0.0,
                             maximum=0.5,
-                            value=0.15,
+                            value=0.2,
                             step=0.05,
                             info="Audio starts this much before subtitle (prevents cutoff)"
                         )
@@ -846,7 +923,7 @@ def create_ui():
                             label="End Safety Margin (seconds)",
                             minimum=0.0,
                             maximum=0.5,
-                            value=0.1,
+                            value=0.15,
                             step=0.05,
                             info="Audio ends this much after subtitle (prevents cutoff)"
                         )
@@ -881,7 +958,7 @@ def create_ui():
                     gr.Markdown("#### Quality Filtering (Amharic-Optimized)")
                     enable_quality_filter = gr.Checkbox(
                         label="Enable Quality Filtering",
-                        value=True,
+                        value=False,
                         info="Recommended: Filters low-quality segments automatically"
                     )
                     

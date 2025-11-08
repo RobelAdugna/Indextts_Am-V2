@@ -136,6 +136,29 @@ uv sync --all-extras
 bash scripts/LANGUAGE/end_to_end.sh
 ```
 
+## WebUI Defaults (Amharic-Optimized)
+
+**Safety Margins:** Start=0.2s, End=0.15s (conservative for YouTube content)
+**Quality Filtering:** Disabled by default (accept more segments)
+**Text Deduplication:** Enabled by default (remove rolling subtitle text)
+**VAD:** Enabled by default (best boundary detection)
+
+## Background Music Removal
+
+**Feature:** Remove music/instruments from downloaded files before dataset creation
+**Library:** audio-separator (UVR backend)
+**Models:** MDX-Net (fast), Demucs (balanced), Demucs FT (slow/best)
+**Install:** `pip install audio-separator[cpu]`
+**Location:** Tab 1 accordion "Remove Background Music"
+**Recommended:** MDX-Net for large batches (8/10 quality, very fast)
+
+## Text Deduplication
+
+**Problem:** SRT subtitles have rolling text (50% overlap between lines)
+**Solution:** Auto-detects 3+ word overlap, removes from current segment
+**Toggle:** Dataset Creation tab checkbox (enabled by default)
+**Result:** Clean, unique text per segment while audio stays aligned
+
 ## Segmentation V2: Production-Grade Implementation
 
 **Status:** ✅ COMPLETE - Production ready
