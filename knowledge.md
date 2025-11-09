@@ -490,6 +490,13 @@ python tools/create_amharic_dataset.py \
 **Fix:** `pip install 'numpy<2'`
 **Added to pyproject.toml:** numpy<2 constraint
 
+### Filename Too Long Error
+**Error:** `OSError: [Errno 36] File name too long`
+**Cause:** YouTube video titles with emojis, special chars create 250+ character filenames
+**Fix:** Automatically implemented - tool skips files with paths >250 chars
+**Warning:** "Filename too long (>250 chars), skipping: ..."
+**Solution:** Rename downloaded files to shorter names before processing, or use shorter output paths
+
 ### Out of Memory
 - Reduce `--batch-size`
 - Increase `--grad-accumulation`

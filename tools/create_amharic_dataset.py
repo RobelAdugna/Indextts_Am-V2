@@ -1170,26 +1170,37 @@ def process_directory(
         
         # Try exact match first
         for ext in subtitle_exts:
-            candidate = audio_file.with_suffix(ext)
-            if candidate.exists():
-                subtitle_file = candidate
-                break
+            try:
+                candidate = audio_file.with_suffix(ext)
+                if candidate.exists():
+                    subtitle_file = candidate
+                    break
+            except OSError:
+                # Skip if filename too long
+                continue
         
         # Try with language codes (e.g., video.am.srt, video.en.srt)
         if not subtitle_file:
             lang_codes = ['am', 'amh', 'en', 'en-US', 'en-GB']
             for lang_code in lang_codes:
                 for ext in subtitle_exts:
-                    # Try patterns like: video.am.srt, video.en.vtt
-                    candidate = audio_file.parent / f"{audio_file.stem}.{lang_code}{ext}"
-                    if candidate.exists():
-                        subtitle_file = candidate
-                        break
+                    try:
+                        # Try patterns like: video.am.srt, video.en.vtt
+                        candidate = audio_file.parent / f"{audio_file.stem}.{lang_code}{ext}"
+                        if candidate.exists():
+                            subtitle_file = candidate
+                            break
+                    except OSError:
+                        # Skip if filename too long
+                        continue
                 if subtitle_file:
                     break
         
         if not subtitle_file:
-            print(f"Warning: No subtitle found for {audio_file.name}")
+            if len(str(audio_file)) > 250:  # Close to filesystem limit
+                print(f"Warning: Filename too long (>250 chars), skipping: {audio_file.name[:80]}...")
+            else:
+                print(f"Warning: No subtitle found for {audio_file.name}")
             continue
         
         print(f"\nProcessing: {audio_file.name} + {subtitle_file.name} [Speaker {speaker_counter:03d}]")
