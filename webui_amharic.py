@@ -433,6 +433,7 @@ def create_dataset(
     end_margin: float,
     enable_text_dedup: bool,
     enable_quality_filter: bool,
+    append_to_dataset: bool,
     min_snr: float,
     max_silence_ratio: float,
     min_words: int,
@@ -488,6 +489,9 @@ def create_dataset(
     
     if not enable_quality_filter:
         cmd.append("--no-quality-check")
+    
+    if append_to_dataset:
+        cmd.append("--append")
     
     if single_speaker:
         cmd.append("--single-speaker")
@@ -1231,6 +1235,12 @@ def create_ui():
                                 info="Too fast = poor alignment (Amharic: 5-20 typical)"
                             )
                     
+                    append_to_dataset = gr.Checkbox(
+                        label="📝 Append to Existing Dataset",
+                        value=False,
+                        info="Continue numbering from existing dataset (e.g., after spk000_003455 → starts spk000_003456). Keeps all existing files."
+                    )
+                    
                     create_dataset_btn = gr.Button("🎵 Create Dataset", variant="primary", size="lg")
                 
                 with gr.Column():
@@ -1263,6 +1273,7 @@ def create_ui():
                     end_margin,
                     enable_text_dedup,
                     enable_quality_filter,
+                    append_to_dataset,
                     min_snr,
                     max_silence_ratio,
                     min_words,

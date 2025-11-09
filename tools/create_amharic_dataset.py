@@ -1124,7 +1124,9 @@ def process_directory(
     report_quality: bool = True,
     single_speaker: bool = False,
     enable_text_dedup: bool = True,
-    min_overlap_words: int = 3
+    min_overlap_words: int = 3,
+    start_speaker_id: int = 0,
+    start_segment_number: int = 0
 ) -> Tuple[List[dict], Dict]:
     """Process all audio/subtitle pairs in a directory
     
@@ -1154,8 +1156,8 @@ def process_directory(
     }
     
     # Track speaker IDs and segment numbers for consistent naming
-    speaker_counter = 0
-    global_segment_counter = 0
+    speaker_counter = start_speaker_id
+    global_segment_counter = start_segment_number
     
     # Find all audio files
     audio_files = []
@@ -1366,7 +1368,60 @@ def parse_args():
         help="Minimum words required to detect text overlap (default: 3)"
     )
     
+    parser.add_argument(
+        "--append",
+        action="store_true",
+        help="Append to existing dataset instead of overwriting (continues numbering)"
+    )
+    
     return parser.parse_args()
+
+
+def get_existing_manifest_info(manifest_path: Path) -> Tuple[int, int, int]:
+    """Get info from existing manifest for append mode
+    
+    Args:
+        manifest_path: Path to existing manifest.jsonl
+    
+    Returns:
+        (last_segment_number, last_speaker_id, total_entries)
+    """
+    if not manifest_path.exists():
+        return 0, 0, 0
+    
+    last_segment = 0
+    last_speaker = 0
+    total = 0
+    
+    with open(manifest_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            if line.strip():
+                try:
+                    entry = json.loads(line)
+                    total += 1  # Only count valid entries
+                except json.JSONDecodeError:
+                    # Skip malformed lines
+                    continue
+                
+                # Extract segment number from ID (format: spk000_003455)
+                segment_id = entry.get('id', '')
+                if '_' in segment_id:
+                    try:
+                        num = int(segment_id.split('_')[1])
+                        last_segment = max(last_segment, num)
+                    except:
+                        pass
+                
+                # Extract speaker ID
+                speaker = entry.get('speaker', 'spk000')
+                if speaker.startswith('spk'):
+                    try:
+                        spk_num = int(speaker[3:])
+                        last_speaker = max(last_speaker, spk_num)
+                    except:
+                        pass
+    
+    return last_segment, last_speaker, total
 
 
 def main():
@@ -1383,6 +1438,26 @@ def main():
         manifest_path = args.output_dir / "manifest.jsonl"
     else:
         manifest_path = args.manifest
+    
+    # Handle append mode
+    start_segment_number = 0
+    start_speaker_id = 0
+    existing_entries = 0
+    
+    if args.append and manifest_path.exists():
+        print("\n🔄 APPEND MODE: Continuing from existing dataset...")
+        last_segment, last_speaker, existing_entries = get_existing_manifest_info(manifest_path)
+        start_segment_number = last_segment + 1  # Start from next number
+        start_speaker_id = last_speaker + (0 if args.single_speaker else 1)  # Next speaker
+        
+        print(f"  📊 Existing dataset info:")
+        print(f"     - Total entries: {existing_entries}")
+        print(f"     - Last segment: spk{last_speaker:03d}_{last_segment:06d}")
+        print(f"     - Next segment will be: spk{start_speaker_id:03d}_{start_segment_number:06d}")
+        print(f"  ✓ New segments will be appended to existing manifest\n")
+    elif args.append:
+        print("\n⚠️  Append mode requested but no existing manifest found.")
+        print("  Creating new dataset...\n")
     
     # Create normalizer
     normalizer = TextNormalizer(preferred_language="am")
@@ -1403,6 +1478,7 @@ def main():
     print(f"Processing files in: {args.input_dir}")
     print(f"Quality filtering: {'disabled' if args.no_quality_check else 'enabled'}")
     print(f"Speaker mode: {'single' if args.single_speaker else 'multi'}")
+    print(f"Text deduplication: {'disabled' if args.no_text_dedup else 'enabled'}")
     
     entries, stats = process_directory(
         args.input_dir,
@@ -1412,12 +1488,20 @@ def main():
         report_quality=not args.no_quality_check,
         single_speaker=args.single_speaker,
         enable_text_dedup=not args.no_text_dedup,
-        min_overlap_words=args.min_overlap_words
+        min_overlap_words=args.min_overlap_words,
+        start_speaker_id=start_speaker_id,
+        start_segment_number=start_segment_number
     )
     
     # Write manifest
-    print(f"\nWriting manifest to: {manifest_path}")
-    with open(manifest_path, 'w', encoding='utf-8') as f:
+    if args.append:
+        print(f"\n📝 Appending {len(entries)} new entries to manifest: {manifest_path}")
+        mode = 'a'  # Append mode
+    else:
+        print(f"\n📝 Writing manifest to: {manifest_path}")
+        mode = 'w'  # Write mode (overwrite)
+    
+    with open(manifest_path, mode, encoding='utf-8') as f:
         for entry in entries:
             f.write(json.dumps(entry, ensure_ascii=False) + '\n')
     
@@ -1428,12 +1512,19 @@ def main():
         print(f"Quality report saved to: {args.quality_report}")
     
     # Print summary
-    print(f"\nDataset created successfully!")
+    print(f"\n{'✓' if not args.append else '✓'} Dataset {'created' if not args.append else 'updated'} successfully!")
     print(f"  Files processed: {stats['files_processed']}")
     print(f"  Files failed: {stats['files_failed']}")
     print(f"  Total segments checked: {stats['total_segments']}")
     print(f"  Accepted segments: {stats['accepted']}")
     print(f"  Rejected segments: {stats['rejected']}")
+    
+    if args.append:
+        total_entries = existing_entries + stats['accepted']
+        print(f"\n  📊 Dataset totals:")
+        print(f"     - Previous entries: {existing_entries}")
+        print(f"     - New entries: {stats['accepted']}")
+        print(f"     - Total entries now: {total_entries}")
     
     if stats['rejection_reasons']:
         print(f"\n  Rejection breakdown:")

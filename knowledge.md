@@ -308,6 +308,42 @@ This ensures:
 - Clear speaker identification
 - No long/unwieldy filenames from source videos
 
+### Incremental Dataset Expansion (--append mode)
+
+**Problem:** Want to add new data without re-processing existing dataset
+**Solution:** Use `--append` flag to continue from last segment number
+
+**How it works:**
+1. Reads existing `manifest.jsonl` to find last segment ID
+2. Continues numbering from next number (e.g., after `spk000_003455` → starts at `spk000_003456`)
+3. Appends new entries to manifest (doesn't overwrite)
+4. All existing audio files remain untouched
+
+**Example:**
+```bash
+# First dataset creation
+python tools/create_amharic_dataset.py \
+  --input-dir downloads_batch1 \
+  --output-dir amharic_dataset \
+  --single-speaker
+# Creates: spk000_000001.wav through spk000_003455.wav
+
+# Add more data later (append mode)
+python tools/create_amharic_dataset.py \
+  --input-dir downloads_batch2 \
+  --output-dir amharic_dataset \
+  --append \
+  --single-speaker
+# Creates: spk000_003456.wav through spk000_005234.wav
+# Appends to existing manifest.jsonl
+```
+
+**Important:**
+- Use same `--single-speaker` or multi-speaker mode as original
+- Use same `--output-dir` as existing dataset
+- Manifest path auto-detected or specify with `--manifest`
+- Safe to run multiple times (won't duplicate existing files)
+
 ## Automated Checkpoint Download
 
 **Problem:** Missing base model checkpoints prevents training
@@ -567,6 +603,31 @@ python webui_amharic.py --share  # Create public link
 - Can skip steps if intermediate files exist
 - Progress tracked in real-time
 - Logs displayed in UI
+
+### Incremental Dataset Expansion in WebUI
+
+**Location:** Tab 2 "Dataset Creation"
+**Checkbox:** "📝 Append to Existing Dataset"
+
+**How to use:**
+1. Download new content (Tab 1) to a separate folder
+2. Go to Tab 2
+3. Set input directory to new downloads
+4. Set output directory to existing dataset
+5. **Check** "Append to Existing Dataset" checkbox
+6. Click "Create Dataset"
+
+**What happens:**
+- Auto-detects last segment number (e.g., spk000_003455)
+- Continues numbering from next (e.g., spk000_003456)
+- Appends new entries to manifest.jsonl
+- Shows existing vs new counts in status
+- All existing files remain untouched
+
+**Important:**
+- Use same "Single Speaker Mode" setting as original
+- Point to existing dataset's output directory
+- New files are in separate input directory
 
 See `README_AMHARIC_WEBUI.md` for complete documentation.
 
