@@ -265,16 +265,38 @@ def remove_background_music(
         start_time = time.time()
         subtitle_stats = {'copied': 0, 'not_found': 0, 'errors': 0}
         
+        renamed_count = 0
+        deleted_instrumental_count = 0
+        
         for i, f in enumerate(audio_files):
             file_start = time.time()
             progress((i+1)/len(audio_files), desc=f"{i+1}/{len(audio_files)}: {f.name[:30]}...")
             try:
-                separator.separate(str(f))
+                # Separate vocals
+                output_files = separator.separate(str(f))
                 file_time = time.time() - file_start
                 logs.append(f"✓ {f.name} ({file_time:.1f}s)")
                 
-                # Copy subtitle files for separated vocals
-                # audio-separator creates files like: filename_(Vocals)_UVR_MDXNET.wav
+                # Find and rename vocal file, delete instrumental
+                vocal_pattern = re.compile(rf'^{re.escape(f.stem)}_\(Vocals\).*\.wav$', re.IGNORECASE)
+                instrumental_pattern = re.compile(rf'^{re.escape(f.stem)}_\(Instrumental\).*\.wav$', re.IGNORECASE)
+                
+                for output_file in output_path.glob(f"{f.stem}*.wav"):
+                    if vocal_pattern.match(output_file.name):
+                        # Rename vocal file to original name
+                        new_name = output_path / f.name
+                        if output_file != new_name:
+                            output_file.rename(new_name)
+                            renamed_count += 1
+                            logs.append(f"  ✏️ Renamed to: {f.name}")
+                    
+                    elif instrumental_pattern.match(output_file.name):
+                        # Delete instrumental file
+                        output_file.unlink()
+                        deleted_instrumental_count += 1
+                        logs.append(f"  🗑️ Deleted instrumental")
+                
+                # Copy subtitle file to match renamed vocal file
                 subtitle_exts = ['.srt', '.vtt', '.webvtt']
                 lang_codes = ['am', 'amh', 'en', 'en-US']
                 
@@ -296,20 +318,16 @@ def remove_background_music(
                         break
                 
                 if original_subtitle:
-                    # Find generated vocal files
-                    vocal_pattern = re.compile(rf'^{re.escape(f.stem)}_\(Vocals\).*\.wav$', re.IGNORECASE)
-                    for vocal_file in output_path.glob(f"{f.stem}*.wav"):
-                        if vocal_pattern.match(vocal_file.name):
-                            # Copy subtitle with matching name
-                            new_subtitle = vocal_file.with_suffix(original_subtitle.suffix)
-                            if not new_subtitle.exists():
-                                try:
-                                    shutil.copy2(original_subtitle, new_subtitle)
-                                    subtitle_stats['copied'] += 1
-                                    logs.append(f"  📄 Copied subtitle: {new_subtitle.name}")
-                                except Exception as e:
-                                    subtitle_stats['errors'] += 1
-                                    logs.append(f"  ⚠️ Subtitle copy failed: {e}")
+                    # Copy to output with same name as audio (now renamed to original)
+                    new_subtitle = output_path / f.with_suffix(original_subtitle.suffix).name
+                    if not new_subtitle.exists():
+                        try:
+                            shutil.copy2(original_subtitle, new_subtitle)
+                            subtitle_stats['copied'] += 1
+                            logs.append(f"  📄 Copied subtitle: {new_subtitle.name}")
+                        except Exception as e:
+                            subtitle_stats['errors'] += 1
+                            logs.append(f"  ⚠️ Subtitle copy failed: {e}")
                 else:
                     subtitle_stats['not_found'] += 1
                     logs.append(f"  ℹ️  No subtitle found for {f.name}")
@@ -321,11 +339,15 @@ def remove_background_music(
         avg_time = total_time / len(audio_files) if audio_files else 0
         logs.insert(0, f"⏱️ Total time: {total_time:.1f}s | Avg per file: {avg_time:.1f}s")
         
+        # Add processing stats
+        logs.append(f"\n✅ Files auto-renamed: {renamed_count}")
+        logs.append(f"🗑️ Instrumental files deleted: {deleted_instrumental_count}")
+        
         # Add subtitle stats
         if subtitle_stats['copied'] > 0 or subtitle_stats['not_found'] > 0:
-            logs.append(f"\n📄 Subtitle files: {subtitle_stats['copied']} copied, {subtitle_stats['not_found']} not found, {subtitle_stats['errors']} errors")
+            logs.append(f"📄 Subtitle files: {subtitle_stats['copied']} copied, {subtitle_stats['not_found']} not found, {subtitle_stats['errors']} errors")
         
-        return f"✅ Processed {len(audio_files)} files\n" + "\n".join(logs), "success"
+        return f"✅ Processed {len(audio_files)} files (auto-cleaned)\n" + "\n".join(logs), "success"
     except Exception as e:
         return f"❌ {e}", "error"
 
