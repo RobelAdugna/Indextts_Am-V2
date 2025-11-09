@@ -21,8 +21,35 @@ Write-Host "Data directory: $DATA_DIR"
 Write-Host "Output directory: $OUTPUT_DIR"
 Write-Host ""
 
+# Step 0: Check and download required checkpoints
+Write-Host "[Step 0/7] Checking for required model checkpoints..." -ForegroundColor Yellow
+$MISSING_CHECKPOINTS = $false
+
+$requiredCheckpoints = @("gpt.pth", "bpe.model", "s2mel.pth", "wav2vec2bert_stats.pt", "feat1.pt", "feat2.pt")
+foreach ($checkpoint in $requiredCheckpoints) {
+    $checkpointPath = Join-Path $CHECKPOINTS_DIR $checkpoint
+    if (-not (Test-Path $checkpointPath)) {
+        Write-Host "  ✗ Missing: $checkpoint" -ForegroundColor Red
+        $MISSING_CHECKPOINTS = $true
+    }
+}
+
+if ($MISSING_CHECKPOINTS) {
+    Write-Host "  ⬇ Downloading missing checkpoints from HuggingFace..." -ForegroundColor Yellow
+    uv run python tools/download_checkpoints.py --output-dir "$CHECKPOINTS_DIR"
+    
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  ✗ Failed to download checkpoints. Exiting." -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "  ✓ Checkpoints downloaded successfully" -ForegroundColor Green
+} else {
+    Write-Host "  ✓ All required checkpoints present" -ForegroundColor Green
+}
+Write-Host ""
+
 # Step 1: Download content (YouTube OR direct URLs)
-Write-Host "[Step 1/7] Downloading Amharic content..." -ForegroundColor Yellow
+Write-Host "[Step 1/8] Downloading Amharic content..." -ForegroundColor Yellow
 
 # Check for media manifest (direct URLs)
 $manifestFile = Join-Path $PROJECT_ROOT "examples\media_manifest.jsonl"
@@ -52,7 +79,7 @@ if (Test-Path $manifestFile) {
 Write-Host ""
 
 # Step 2: Create dataset from media files
-Write-Host "[Step 2/7] Creating dataset from audio and subtitle files..." -ForegroundColor Yellow
+Write-Host "[Step 2/8] Creating dataset from audio and subtitle files..." -ForegroundColor Yellow
 $downloadsDir = Join-Path $DATA_DIR "downloads"
 if (Test-Path $downloadsDir) {
     uv run python tools/create_amharic_dataset.py `
@@ -68,7 +95,7 @@ if (Test-Path $downloadsDir) {
 Write-Host ""
 
 # Step 3: Collect and clean corpus
-Write-Host "[Step 3/7] Collecting and cleaning Amharic corpus..." -ForegroundColor Yellow
+Write-Host "[Step 3/8] Collecting and cleaning Amharic corpus..." -ForegroundColor Yellow
 $manifestFile = Join-Path $DATA_DIR "raw_dataset\manifest.jsonl"
 if (Test-Path $manifestFile) {
     uv run python tools/collect_amharic_corpus.py `
@@ -83,7 +110,7 @@ if (Test-Path $manifestFile) {
 Write-Host ""
 
 # Step 4: Train/extend BPE tokenizer
-Write-Host "[Step 4/7] Training multilingual BPE tokenizer..." -ForegroundColor Yellow
+Write-Host "[Step 4/8] Training multilingual BPE tokenizer..." -ForegroundColor Yellow
 $corpusFile = Join-Path $DATA_DIR "amharic_corpus.txt"
 if (Test-Path $corpusFile) {
     $baseTokenizer = Join-Path $CHECKPOINTS_DIR "bpe.model"
@@ -111,7 +138,7 @@ if (Test-Path $corpusFile) {
 Write-Host ""
 
 # Step 5: Preprocess data
-Write-Host "[Step 5/7] Preprocessing Amharic dataset..." -ForegroundColor Yellow
+Write-Host "[Step 5/8] Preprocessing Amharic dataset..." -ForegroundColor Yellow
 $tokenizerFile = Join-Path $OUTPUT_DIR "amharic_bpe.model"
 if ((Test-Path $manifestFile) -and (Test-Path $tokenizerFile)) {
     uv run python tools/preprocess_data.py `
@@ -128,7 +155,7 @@ if ((Test-Path $manifestFile) -and (Test-Path $tokenizerFile)) {
 Write-Host ""
 
 # Step 6: Generate prompt-target pairs
-Write-Host "[Step 6/7] Generating GPT prompt-target pairs..." -ForegroundColor Yellow
+Write-Host "[Step 6/8] Generating GPT prompt-target pairs..." -ForegroundColor Yellow
 $trainManifest = Join-Path $DATA_DIR "processed\train_manifest.jsonl"
 if (Test-Path $trainManifest) {
     $pairScript = Join-Path $PROJECT_ROOT "tools\build_gpt_prompt_pairs.py"
@@ -153,7 +180,7 @@ if (Test-Path $trainManifest) {
 Write-Host ""
 
 # Step 7: Train GPT model
-Write-Host "[Step 7/7] Training GPT model (this will take a long time)..." -ForegroundColor Yellow
+Write-Host "[Step 7/8] Training GPT model (this will take a long time)..." -ForegroundColor Yellow
 $trainPairs = Join-Path $DATA_DIR "processed\train_pairs.jsonl"
 if (Test-Path $trainPairs) {
     Write-Host "  Starting training..."

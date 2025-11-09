@@ -23,8 +23,33 @@ echo "Data directory: ${DATA_DIR}"
 echo "Output directory: ${OUTPUT_DIR}"
 echo ""
 
+# Step 0: Check and download required checkpoints
+echo "[Step 0/7] Checking for required model checkpoints..."
+MISSING_CHECKPOINTS=false
+
+for checkpoint in "gpt.pth" "bpe.model" "s2mel.pth" "wav2vec2bert_stats.pt" "feat1.pt" "feat2.pt"; do
+    if [ ! -f "${CHECKPOINTS_DIR}/${checkpoint}" ]; then
+        echo "  ✗ Missing: ${checkpoint}"
+        MISSING_CHECKPOINTS=true
+    fi
+done
+
+if [ "$MISSING_CHECKPOINTS" = true ]; then
+    echo "  ⬇ Downloading missing checkpoints from HuggingFace..."
+    uv run python tools/download_checkpoints.py --output-dir "${CHECKPOINTS_DIR}"
+    
+    if [ $? -ne 0 ]; then
+        echo "  ✗ Failed to download checkpoints. Exiting."
+        exit 1
+    fi
+    echo "  ✓ Checkpoints downloaded successfully"
+else
+    echo "  ✓ All required checkpoints present"
+fi
+echo ""
+
 # Step 1: Download content (YouTube OR direct URLs)
-echo "[Step 1/7] Downloading Amharic content..."
+echo "[Step 1/8] Downloading Amharic content..."
 
 # Check for media manifest (direct URLs)
 if [ -f "${PROJECT_ROOT}/examples/media_manifest.jsonl" ]; then
@@ -53,7 +78,7 @@ fi
 echo ""
 
 # Step 2: Create dataset from media files
-echo "[Step 2/7] Creating dataset from audio and subtitle files..."
+echo "[Step 2/8] Creating dataset from audio and subtitle files..."
 if [ -d "${DATA_DIR}/downloads" ]; then
     uv run python tools/create_amharic_dataset.py \
         --input-dir "${DATA_DIR}/downloads" \
@@ -68,7 +93,7 @@ fi
 echo ""
 
 # Step 3: Collect and clean corpus
-echo "[Step 3/7] Collecting and cleaning Amharic corpus..."
+echo "[Step 3/8] Collecting and cleaning Amharic corpus..."
 if [ -f "${DATA_DIR}/raw_dataset/manifest.jsonl" ]; then
     uv run python tools/collect_amharic_corpus.py \
         --input "${DATA_DIR}/raw_dataset/manifest.jsonl" \
@@ -82,7 +107,7 @@ fi
 echo ""
 
 # Step 4: Train/extend BPE tokenizer
-echo "[Step 4/7] Training multilingual BPE tokenizer..."
+echo "[Step 4/8] Training multilingual BPE tokenizer..."
 if [ -f "${DATA_DIR}/amharic_corpus.txt" ]; then
     # Check if base tokenizer exists
     if [ -f "${CHECKPOINTS_DIR}/bpe.model" ]; then
@@ -110,7 +135,7 @@ fi
 echo ""
 
 # Step 5: Preprocess data
-echo "[Step 5/7] Preprocessing Amharic dataset..."
+echo "[Step 5/8] Preprocessing Amharic dataset..."
 if [ -f "${DATA_DIR}/raw_dataset/manifest.jsonl" ] && [ -f "${OUTPUT_DIR}/amharic_bpe.model" ]; then
     uv run python tools/preprocess_data.py \
         --manifest "${DATA_DIR}/raw_dataset/manifest.jsonl" \
@@ -126,7 +151,7 @@ fi
 echo ""
 
 # Step 6: Generate prompt-target pairs
-echo "[Step 6/7] Generating GPT prompt-target pairs..."
+echo "[Step 6/8] Generating GPT prompt-target pairs..."
 if [ -f "${DATA_DIR}/processed/train_manifest.jsonl" ]; then
     # Check if pair generation script exists
     if [ -f "${PROJECT_ROOT}/tools/build_gpt_prompt_pairs.py" ]; then
@@ -151,7 +176,7 @@ fi
 echo ""
 
 # Step 7: Train GPT model
-echo "[Step 7/7] Training GPT model (this will take a long time)..."
+echo "[Step 7/8] Training GPT model (this will take a long time)..."
 if [ -f "${DATA_DIR}/processed/train_pairs.jsonl" ]; then
     echo "  Starting training..."
     echo "  You can monitor progress in: ${OUTPUT_DIR}/trained_ckpts/logs/"

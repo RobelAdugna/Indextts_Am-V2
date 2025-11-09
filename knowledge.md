@@ -308,6 +308,43 @@ This ensures:
 - Clear speaker identification
 - No long/unwieldy filenames from source videos
 
+## Automated Checkpoint Download
+
+**Problem:** Missing base model checkpoints prevents training
+**Solution:** Automatic download from HuggingFace
+
+**Quick Setup (Windows):**
+```bash
+double-click download_requirements.bat
+```
+
+**Quick Setup (Linux/Mac):**
+```bash
+bash download_requirements.sh
+```
+
+**Manual Download:**
+```bash
+pip install huggingface-hub
+python tools/download_checkpoints.py
+```
+
+**What Gets Downloaded:**
+- `gpt.pth` - Base GPT model (~500MB-1GB)
+- `bpe.model` - Base BPE tokenizer
+- `s2mel.pth` - Semantic-to-mel model
+- `wav2vec2bert_stats.pt` - Feature stats
+- `feat1.pt` - Speaker embeddings
+- `feat2.pt` - Emotion embeddings
+- `config.yaml` - Model configuration
+
+**Source:** HuggingFace repository `IndexTeam/IndexTTS-2`
+
+**Automatic Integration:**
+- End-to-end scripts check for checkpoints on startup
+- Auto-downloads missing files before training
+- Safe to interrupt and resume
+
 ## Common Issues & Solutions
 
 ### YouTube Downloader Enhancements
