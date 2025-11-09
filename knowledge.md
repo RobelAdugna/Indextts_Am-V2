@@ -339,7 +339,7 @@ This ensures:
 - Integrates audio-separator for vocal extraction
 - Removes background music/instruments before dataset creation
 - Use `--remove-noise` flag to enable
-- Default model: UVR-MDX-NET-Inst_HQ_3 (good balance)
+- Default model: UVR-MDX-NET-Inst_HQ_4.onnx (good balance)
 - Requires: `pip install audio-separator`
 - Replaces original files with noise-free versions
 
@@ -579,7 +579,7 @@ See `README_AMHARIC_WEBUI.md` for complete documentation.
 1. Navigate to Tab 7 "Process Segments"
 2. Select input source (manifest or directory)
 3. Choose noise removal model:
-   - **UVR-MDX-NET**: Fast, high quality (recommended)
+   - **UVR-MDX-NET-Inst_HQ_4.onnx**: Fast, high quality (recommended)
    - **Demucs**: Slower, best quality
 4. Configure options:
    - Keep backup files (optional)
@@ -593,13 +593,13 @@ See `README_AMHARIC_WEBUI.md` for complete documentation.
 # Process from manifest
 python tools/process_dataset_segments.py \
   --manifest amharic_dataset/manifest.jsonl \
-  --model UVR-MDX-NET-Inst_HQ_3 \
+  --model UVR-MDX-NET-Inst_HQ_4.onnx \
   --keep-backup
 
 # Process audio directory directly
 python tools/process_dataset_segments.py \
   --audio-dir amharic_dataset/audio \
-  --model UVR-MDX-NET-Inst_HQ_3
+  --model UVR-MDX-NET-Inst_HQ_4.onnx
 
 # Resume after interruption (default behavior)
 python tools/process_dataset_segments.py \
@@ -613,8 +613,8 @@ python tools/process_dataset_segments.py \
 
 ### Models
 
-- **UVR-MDX-NET-Inst_HQ_3**: Balanced speed/quality (recommended for large datasets)
-- **UVR_MDXNET_KARA_2.onnx**: Alternative MDX-Net variant
+- **UVR-MDX-NET-Inst_HQ_4.onnx**: Balanced speed/quality (recommended for large datasets)
+- **UVR_MDXNET_KARA_2.onnx**: Alternative MDX-Net variant for karaoke-style separation
 - **htdemucs**: Best quality, slower processing
 
 ### Important Notes

@@ -106,7 +106,7 @@ def process_segment(
 
 def process_dataset(
     audio_dir: Path,
-    model_name: str = "UVR-MDX-NET-Inst_HQ_3",
+    model_name: str = "UVR-MDX-NET-Inst_HQ_4.onnx",
     keep_backup: bool = False,
     resume: bool = True,
     progress_file: Optional[Path] = None,
@@ -241,7 +241,7 @@ def process_dataset(
 
 def process_from_manifest(
     manifest_path: Path,
-    model_name: str = "UVR-MDX-NET-Inst_HQ_3",
+    model_name: str = "UVR-MDX-NET-Inst_HQ_4.onnx",
     keep_backup: bool = False,
     resume: bool = True,
     batch_size: int = 10
@@ -319,8 +319,8 @@ def parse_args():
     # Processing options
     parser.add_argument(
         "--model",
-        default="UVR-MDX-NET-Inst_HQ_3",
-        help="audio-separator model to use (default: UVR-MDX-NET-Inst_HQ_3)"
+        default="UVR-MDX-NET-Inst_HQ_4.onnx",
+        help="audio-separator model to use (default: UVR-MDX-NET-Inst_HQ_4.onnx)"
     )
     
     parser.add_argument(
