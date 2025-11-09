@@ -486,6 +486,7 @@ def deduplicate_subtitle_text(
     
     Many subtitle files have "rolling text" where each line repeats part
     of the previous line for viewer comprehension. This removes that overlap.
+    Also handles cases where segments have overlapping timestamps with identical text.
     
     Args:
         segments: List of subtitle segments
@@ -508,6 +509,12 @@ def deduplicate_subtitle_text(
             prev_text = current_text
             continue
         
+        # Check for exact duplicate (same text in overlapping timestamps)
+        if current_text == prev_text:
+            # Skip this segment entirely - it's a complete duplicate
+            # Don't update prev_text - keep comparing against the original
+            continue
+        
         # Split into words
         prev_words = prev_text.split()
         curr_words = current_text.split()
@@ -528,16 +535,34 @@ def deduplicate_subtitle_text(
             if prev_suffix == curr_prefix:
                 max_overlap = overlap_len
         
+        # Also check for substring matches (one text contains the other)
+        # Only apply if texts are reasonably long to avoid false positives
+        if max_overlap == 0 and len(current_text) > 20:
+            # Check if current is a substring of previous or vice versa
+            if current_text in prev_text:
+                # Current is contained in previous - skip current
+                continue
+            elif prev_text in current_text:
+                # Previous is contained in current - keep current, it's more complete
+                # Update prev_text and continue to next segment
+                deduplicated.append(seg)
+                prev_text = current_text
+                continue
+        
         if max_overlap > 0:
             # Remove overlap from current
             new_text = ' '.join(curr_words[max_overlap:])
-            new_seg = SubtitleSegment(
-                start_time=seg.start_time,
-                end_time=seg.end_time,
-                text=new_text,
-                index=seg.index
-            )
-            deduplicated.append(new_seg)
+            
+            # Only add if there's meaningful text left
+            if new_text.strip():
+                new_seg = SubtitleSegment(
+                    start_time=seg.start_time,
+                    end_time=seg.end_time,
+                    text=new_text,
+                    index=seg.index
+                )
+                deduplicated.append(new_seg)
+            # Always update prev_text to current for next comparison
             prev_text = current_text
         else:
             deduplicated.append(seg)
