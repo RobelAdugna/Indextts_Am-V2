@@ -1491,8 +1491,216 @@ def create_ui():
                 outputs=[training_status, training_info]
             )
         
-        # Tab 7: Inference (link to existing webui)
-        with gr.Tab("7️⃣ Inference"):
+        # Tab 7: Dataset Segment Processing
+        with gr.Tab("7️⃣ Process Segments"):
+            gr.Markdown("### Remove Noise from Existing Dataset Segments")
+            gr.Markdown("""
+            **Post-processing for existing datasets:** Remove background music/noise from already-created 
+            dataset segments while maintaining all filenames and manifest structure.
+            
+            **Features:**
+            - Processes all audio segments in dataset/audio directory
+            - Maintains exact filenames (in-place replacement)
+            - Supports resume from interruption
+            - Progress tracking with periodic saves
+            - Optional backup of original files
+            """)
+            
+            with gr.Row():
+                with gr.Column():
+                    segment_input_source = gr.Radio(
+                        label="Input Source",
+                        choices=[
+                            ("From Manifest (Recommended)", "manifest"),
+                            ("Audio Directory", "directory")
+                        ],
+                        value="manifest"
+                    )
+                    
+                    segment_manifest_path = gr.Textbox(
+                        label="Manifest Path",
+                        placeholder="amharic_dataset/manifest.jsonl",
+                        visible=True
+                    )
+                    
+                    segment_audio_dir = gr.Textbox(
+                        label="Audio Directory",
+                        placeholder="amharic_dataset/audio",
+                        visible=False
+                    )
+                    
+                    segment_model = gr.Radio(
+                        label="Noise Removal Model",
+                        choices=[
+                            ("UVR-MDX-NET (Fast, High Quality)", "UVR-MDX-NET-Inst_HQ_3"),
+                            ("UVR-MDX-NET KARA", "UVR_MDXNET_KARA_2.onnx"),
+                            ("Demucs (Slower, Best Quality)", "htdemucs")
+                        ],
+                        value="UVR-MDX-NET-Inst_HQ_3",
+                        info="MDX-NET recommended for speed/quality balance"
+                    )
+                    
+                    with gr.Row():
+                        segment_keep_backup = gr.Checkbox(
+                            label="Keep Backup Files",
+                            value=False,
+                            info="Save originals with .backup extension"
+                        )
+                        segment_resume = gr.Checkbox(
+                            label="Resume from Previous Run",
+                            value=True,
+                            info="Skip already-processed files"
+                        )
+                    
+                    segment_batch_size = gr.Slider(
+                        label="Progress Save Interval",
+                        minimum=5,
+                        maximum=50,
+                        value=10,
+                        step=5,
+                        info="Save progress after this many files"
+                    )
+                    
+                    process_segments_btn = gr.Button(
+                        "🎵 Process Dataset Segments",
+                        variant="primary",
+                        size="lg"
+                    )
+                
+                with gr.Column():
+                    segment_status = gr.HTML("Ready to process segments")
+                    segment_logs = gr.Textbox(label="Logs", lines=15, max_lines=20)
+                    
+                    gr.Markdown("""
+                    **⚠️ Important Notes:**
+                    - This replaces original audio files with noise-removed versions
+                    - Enable "Keep Backup Files" if you want to preserve originals
+                    - Process can be interrupted and resumed later
+                    - Manifest.jsonl is not modified (only audio files change)
+                    """)
+            
+            # Toggle visibility based on input source
+            def toggle_input_source(source):
+                return (
+                    gr.update(visible=source == "manifest"),
+                    gr.update(visible=source == "directory")
+                )
+            
+            segment_input_source.change(
+                toggle_input_source,
+                inputs=[segment_input_source],
+                outputs=[segment_manifest_path, segment_audio_dir]
+            )
+            
+            # Auto-fill from pipeline state
+            state.change(
+                lambda s: str(Path(s.get("dataset_dir", "amharic_dataset")) / "manifest.jsonl") if s.get("dataset_dir") else "amharic_dataset/manifest.jsonl",
+                inputs=[state],
+                outputs=[segment_manifest_path]
+            )
+            
+            def process_dataset_segments(
+                input_source: str,
+                manifest_path: str,
+                audio_dir: str,
+                model_name: str,
+                keep_backup: bool,
+                resume: bool,
+                batch_size: int,
+                progress=gr.Progress()
+            ) -> Tuple[str, str]:
+                """Process dataset segments to remove noise"""
+                try:
+                    script_path = Path(current_dir) / "tools" / "process_dataset_segments.py"
+                    
+                    if not script_path.exists():
+                        return format_status_html("❌ Error: Processing script not found", False), ""
+                    
+                    # Build command
+                    cmd = [sys.executable, str(script_path)]
+                    
+                    if input_source == "manifest":
+                        if not manifest_path:
+                            return format_status_html("❌ Error: Manifest path required", False), ""
+                        cmd.extend(["--manifest", manifest_path])
+                    else:
+                        if not audio_dir:
+                            return format_status_html("❌ Error: Audio directory required", False), ""
+                        cmd.extend(["--audio-dir", audio_dir])
+                    
+                    cmd.extend(["--model", model_name])
+                    cmd.extend(["--batch-size", str(int(batch_size))])
+                    
+                    if keep_backup:
+                        cmd.append("--keep-backup")
+                    
+                    if not resume:
+                        cmd.append("--no-resume")
+                    
+                    progress(0.1, desc="Starting processing...")
+                    
+                    # Run processing
+                    process = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        bufsize=1
+                    )
+                    
+                    log_lines = []
+                    while True:
+                        line = process.stdout.readline()
+                        if not line and process.poll() is not None:
+                            break
+                        if line:
+                            log_lines.append(line.strip())
+                            # Update progress based on output
+                            if "Processing" in line:
+                                progress(0.5, desc="Processing segments...")
+                    
+                    process.wait()
+                    
+                    progress(0.9, desc="Finalizing...")
+                    
+                    log_text = "\n".join(log_lines)
+                    
+                    if process.returncode == 0:
+                        # Parse stats from output
+                        total = processed = 0
+                        for line in log_lines:
+                            if "Total segments:" in line:
+                                total = int(line.split(":")[-1].strip())
+                            elif "Processed:" in line:
+                                processed = int(line.split(":")[-1].strip())
+                        
+                        status_html = format_status_html(
+                            f"✅ Processing complete: {processed}/{total} segments processed"
+                        )
+                    else:
+                        status_html = format_status_html("❌ Processing failed", False)
+                    
+                    return status_html, log_text
+                
+                except Exception as e:
+                    return format_status_html(f"❌ Error: {str(e)}", False), str(e)
+            
+            process_segments_btn.click(
+                process_dataset_segments,
+                inputs=[
+                    segment_input_source,
+                    segment_manifest_path,
+                    segment_audio_dir,
+                    segment_model,
+                    segment_keep_backup,
+                    segment_resume,
+                    segment_batch_size
+                ],
+                outputs=[segment_status, segment_logs]
+            )
+        
+        # Tab 8: Inference (link to existing webui)
+        with gr.Tab("8️⃣ Inference"):
             gr.Markdown("### Generate Speech")
             gr.Markdown("""
             For inference, use the main WebUI:

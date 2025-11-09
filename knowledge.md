@@ -522,7 +522,8 @@ python webui_amharic.py --share  # Create public link
 4. Tokenizer - BPE model training
 5. Preprocess - Feature extraction
 6. Training - GPT fine-tuning launcher
-7. Inference - Links to existing TTS UIs
+7. Process Segments - Batch noise removal for existing datasets
+8. Inference - Links to existing TTS UIs
 
 ### Usage Pattern
 - Each tab auto-fills from previous step's output
@@ -531,6 +532,114 @@ python webui_amharic.py --share  # Create public link
 - Logs displayed in UI
 
 See `README_AMHARIC_WEBUI.md` for complete documentation.
+
+## Post-Processing Dataset Segments
+
+**Feature:** Remove background music/noise from already-created dataset segments
+**Location:** Tab 7 "Process Segments" in webui_amharic.py
+**CLI Tool:** `tools/process_dataset_segments.py`
+
+### Use Cases
+- Clean up existing datasets without re-segmenting
+- Apply noise removal after dataset creation
+- Improve audio quality of legacy datasets
+- Process datasets created before noise removal was available
+
+### Key Features
+
+**In-Place Processing:**
+- Replaces original audio files with noise-removed versions
+- Maintains exact filenames (e.g., `spk000_000001.wav` stays `spk000_000001.wav`)
+- Manifest.jsonl remains valid (only audio content changes)
+- No need to regenerate features or retrain
+
+**Resume Capability:**
+- Automatically saves progress every N files (configurable)
+- Can safely interrupt and resume later
+- Progress tracked in `.noise_removal_progress.json`
+- Skips already-processed files on resume
+
+**Safety Options:**
+- Optional backup of original files (`.backup` extension)
+- Validates all segments processed successfully
+- Reports errors for failed segments
+
+**Input Modes:**
+1. **From Manifest** (Recommended):
+   - Reads `manifest.jsonl` to find dataset directory
+   - Processes all files in `dataset/audio/` directory
+   - Automatically determines audio location
+
+2. **Audio Directory**:
+   - Directly specify audio segment directory
+   - Useful for custom directory structures
+
+### WebUI Usage
+
+1. Navigate to Tab 7 "Process Segments"
+2. Select input source (manifest or directory)
+3. Choose noise removal model:
+   - **UVR-MDX-NET**: Fast, high quality (recommended)
+   - **Demucs**: Slower, best quality
+4. Configure options:
+   - Keep backup files (optional)
+   - Resume from previous run (recommended)
+   - Progress save interval (default: 10 files)
+5. Click "Process Dataset Segments"
+
+### CLI Usage
+
+```bash
+# Process from manifest
+python tools/process_dataset_segments.py \
+  --manifest amharic_dataset/manifest.jsonl \
+  --model UVR-MDX-NET-Inst_HQ_3 \
+  --keep-backup
+
+# Process audio directory directly
+python tools/process_dataset_segments.py \
+  --audio-dir amharic_dataset/audio \
+  --model UVR-MDX-NET-Inst_HQ_3
+
+# Resume after interruption (default behavior)
+python tools/process_dataset_segments.py \
+  --manifest amharic_dataset/manifest.jsonl
+
+# Start fresh (ignore previous progress)
+python tools/process_dataset_segments.py \
+  --manifest amharic_dataset/manifest.jsonl \
+  --no-resume
+```
+
+### Models
+
+- **UVR-MDX-NET-Inst_HQ_3**: Balanced speed/quality (recommended for large datasets)
+- **UVR_MDXNET_KARA_2.onnx**: Alternative MDX-Net variant
+- **htdemucs**: Best quality, slower processing
+
+### Important Notes
+
+1. **GPU Acceleration**: Automatically detects and uses GPU if available (much faster)
+2. **Backup Recommended**: Use `--keep-backup` for first run to preserve originals
+3. **Progress Tracking**: Progress saved in dataset directory as `.noise_removal_progress.json`
+4. **Manifest Compatibility**: Original manifest.jsonl remains valid after processing
+5. **Memory Efficient**: Processes one file at a time, no batch loading
+6. **Safe Interruption**: Can stop (Ctrl+C) and resume anytime
+
+### Workflow
+
+**Typical workflow for improving existing dataset:**
+1. Create dataset using standard pipeline (Tabs 1-2)
+2. Train initial model to test quality
+3. If background noise is an issue, run Tab 7 to clean segments
+4. No need to re-preprocess (features unchanged)
+5. Can resume training or train new model
+
+**When to use:**
+- Dataset has noticeable background music
+- Audio quality inconsistent across segments
+- Want to improve existing dataset without re-collecting data
+- Legacy datasets created before noise removal was available
 
 ## Resources
 
