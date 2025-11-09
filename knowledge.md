@@ -310,6 +310,54 @@ This ensures:
 
 ## Common Issues & Solutions
 
+### YouTube Downloader Enhancements
+
+**URL Validation:**
+- Validates YouTube URL format before attempting download
+- Supports youtube.com/watch, youtu.be, embed, and /v/ formats
+- Provides clear error messages for invalid URLs
+
+**Subtitle Availability Check:**
+- Pre-download subtitle checking with `--check-subs-first` (default: enabled)
+- Checks for manual and auto-generated subtitles in requested languages
+- Skips videos without subtitles to save bandwidth and storage
+- Use `--no-check-subs` to disable and download all videos
+
+**Post-Download Cleanup:**
+- Automatically removes audio files without matching subtitle pairs
+- Searches for exact matches and language-coded subtitles (e.g., `video.am.srt`)
+- Also deletes associated .info.json files
+- Use `--no-cleanup` to disable
+
+**Temporary Folder Cleanup:**
+- Cleans up temp folders after batch downloads complete
+- Searches for common temp patterns: temp, tmp, .temp, .tmp, *_temp, *_tmp
+- Frees up disk space automatically
+- Use `--no-cleanup-temp` to keep temp files
+
+**Background Noise Removal:**
+- Integrates audio-separator for vocal extraction
+- Removes background music/instruments before dataset creation
+- Use `--remove-noise` flag to enable
+- Default model: UVR-MDX-NET-Inst_HQ_3 (good balance)
+- Requires: `pip install audio-separator`
+- Replaces original files with noise-free versions
+
+**Usage Examples:**
+```bash
+# Basic download with subtitle checking
+python tools/youtube_amharic_downloader.py --url-file urls.txt
+
+# Download with noise removal
+python tools/youtube_amharic_downloader.py --url-file urls.txt --remove-noise
+
+# Download without cleanup (keep all files)
+python tools/youtube_amharic_downloader.py --url-file urls.txt --no-cleanup --no-cleanup-temp
+
+# Skip subtitle check (download all videos)
+python tools/youtube_amharic_downloader.py --url-file urls.txt --no-check-subs
+```
+
 ### Subtitle Detection Issues
 **Problem:** Dataset creator can't find subtitle files for downloaded videos
 **Cause:** yt-dlp adds language codes to subtitle filenames (e.g., `video.am.srt`)
