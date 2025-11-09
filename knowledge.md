@@ -620,11 +620,15 @@ python tools/process_dataset_segments.py \
 ### Important Notes
 
 1. **GPU Acceleration**: Automatically detects and uses GPU if available (much faster)
+   - Use `--mdx-batch-size 8` for GPUs with 16GB+ VRAM (default: 4)
+   - Use `--no-autocast` to disable mixed precision if experiencing issues
+   - Use `--normalization 0.9` to normalize audio levels (default: 0.9)
 2. **Backup Recommended**: Use `--keep-backup` for first run to preserve originals
 3. **Progress Tracking**: Progress saved in dataset directory as `.noise_removal_progress.json`
 4. **Manifest Compatibility**: Original manifest.jsonl remains valid after processing
-5. **Memory Efficient**: Processes one file at a time, no batch loading
+5. **Memory Efficient**: Processes files sequentially with GPU optimization
 6. **Safe Interruption**: Can stop (Ctrl+C) and resume anytime
+7. **Chunk Processing**: `--chunk-size` groups files for progress tracking (not parallel processing)
 
 ### Workflow
 
