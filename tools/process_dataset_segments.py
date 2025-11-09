@@ -161,7 +161,7 @@ def process_dataset(
             output_dir=str(temp_dir),
             output_format='WAV'
         )
-        separator.load_model(model_name=model_name)
+        separator.load_model(model_name)
         
         # Check GPU availability
         try:
