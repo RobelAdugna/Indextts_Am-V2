@@ -294,7 +294,7 @@ def process_dataset(
         if 'mdx' in model_name.lower():
             model_params['mdx_batch_size'] = mdx_batch_size
         
-        separator.load_model(model_name, **model_params)
+        separator.load_model(model_filename=model_name, **model_params)
         
         # Check GPU availability
         try:

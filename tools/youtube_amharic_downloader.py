@@ -414,7 +414,7 @@ def remove_background_noise(
         )
         
         # Load model
-        separator.load_model(model_name=model_name)
+        separator.load_model(model_filename=model_name)
         
         # Separate vocals
         output_files = separator.separate(str(audio_file))
