@@ -1561,6 +1561,48 @@ def create_ui():
                         info="Save progress after this many files"
                     )
                     
+                    with gr.Accordion("🚀 GPU Optimization Settings", open=False):
+                        gr.Markdown("""
+                        **GPU Performance Tuning:**
+                        - Chunk Size: Number of files to process in each group (not parallel)
+                        - MDX Batch Size: Higher values use more VRAM but process faster
+                        - Autocast: Mixed precision for faster processing on modern GPUs
+                        - Normalization: Audio level normalization (0.0-1.0)
+                        """)
+                        
+                        segment_chunk_size = gr.Slider(
+                            label="Chunk Size",
+                            minimum=1,
+                            maximum=10,
+                            value=1,
+                            step=1,
+                            info="Files per chunk (for progress tracking)"
+                        )
+                        
+                        segment_mdx_batch = gr.Slider(
+                            label="MDX Batch Size",
+                            minimum=1,
+                            maximum=16,
+                            value=4,
+                            step=1,
+                            info="GPU batch size (8-16 for 16GB+ VRAM, 4 for 8GB)"
+                        )
+                        
+                        segment_autocast = gr.Checkbox(
+                            label="Enable Autocast (Mixed Precision)",
+                            value=True,
+                            info="Faster on modern GPUs, disable if issues occur"
+                        )
+                        
+                        segment_normalization = gr.Slider(
+                            label="Audio Normalization",
+                            minimum=0.0,
+                            maximum=1.0,
+                            value=0.9,
+                            step=0.1,
+                            info="Normalize audio levels (0.9 recommended)"
+                        )
+                    
                     process_segments_btn = gr.Button(
                         "🎵 Process Dataset Segments",
                         variant="primary",
@@ -1607,6 +1649,10 @@ def create_ui():
                 keep_backup: bool,
                 resume: bool,
                 batch_size: int,
+                chunk_size: int,
+                mdx_batch_size: int,
+                use_autocast: bool,
+                normalization: float,
                 progress=gr.Progress()
             ) -> Tuple[str, str]:
                 """Process dataset segments to remove noise"""
@@ -1630,12 +1676,18 @@ def create_ui():
                     
                     cmd.extend(["--model", model_name])
                     cmd.extend(["--batch-size", str(int(batch_size))])
+                    cmd.extend(["--chunk-size", str(int(chunk_size))])
+                    cmd.extend(["--mdx-batch-size", str(int(mdx_batch_size))])
+                    cmd.extend(["--normalization", str(normalization)])
                     
                     if keep_backup:
                         cmd.append("--keep-backup")
                     
                     if not resume:
                         cmd.append("--no-resume")
+                    
+                    if not use_autocast:
+                        cmd.append("--no-autocast")
                     
                     progress(0.1, desc="Starting processing...")
                     
@@ -1694,7 +1746,11 @@ def create_ui():
                     segment_model,
                     segment_keep_backup,
                     segment_resume,
-                    segment_batch_size
+                    segment_batch_size,
+                    segment_chunk_size,
+                    segment_mdx_batch,
+                    segment_autocast,
+                    segment_normalization
                 ],
                 outputs=[segment_status, segment_logs]
             )
