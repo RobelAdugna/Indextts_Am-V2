@@ -14,6 +14,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict
+import logging
 
 import librosa
 import numpy as np
@@ -29,6 +30,8 @@ except ImportError:
     print("Install with: pip install webrtcvad")
 
 from indextts.utils.front import TextNormalizer
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -483,20 +486,49 @@ def deduplicate_subtitle_text(
     min_overlap_words: int = 3
 ) -> List[SubtitleSegment]:
     """Remove overlapping text from consecutive subtitle segments
-    
+
     Many subtitle files have "rolling text" where each line repeats part
     of the previous line for viewer comprehension. This removes that overlap.
     Also handles cases where segments have overlapping timestamps with identical text.
-    
+
+    When a previous segment is contained in the current segment, the previous is kept
+    and only the new portion of the current is added as a separate segment.
+
+    Set logging level to DEBUG to see detailed deduplication operations.
+    Uses text normalization to handle punctuation and spacing variations.
+    Allows detection of full-length overlaps (not limited to 50% of current segment).
+    Performs post-trim normalized check to catch remaining overlaps.
+
+    Example:
+        Before: ["ለምን ይነካል በሚል ርዕስ", "ለምን ይነካል በሚል ርዕስ ያቀረበው"]
+        After:  ["ለምን ይነካል በሚል ርዕስ", "ያቀረበው"]
+
     Args:
         segments: List of subtitle segments
         min_overlap_words: Minimum words for overlap detection (default: 3)
-    
+
     Returns:
         List of segments with deduplicated text
     """
     if len(segments) <= 1:
         return segments
+
+    def normalize_text(text: str) -> str:
+        """Normalize text for robust comparison by removing punctuation and normalizing whitespace.
+
+        Handles Amharic punctuation and spacing variations common in YouTube auto-captions.
+
+        Args:
+            text: Input text to normalize
+
+        Returns:
+            Normalized text
+        """
+        # Replace all non-word/non-space characters with spaces
+        text = re.sub(r'[^\w\s]', ' ', text)
+        # Normalize multiple spaces to single space and strip
+        text = re.sub(r'\s+', ' ', text.strip())
+        return text
     
     deduplicated = []
     
@@ -518,6 +550,7 @@ def deduplicate_subtitle_text(
         # Check for exact duplicate (same text in overlapping timestamps)
         if current_text == prev_added_text:
             # Skip this segment entirely - it's a complete duplicate
+            logger.debug(f"Segment {seg.index}: Skipping exact duplicate - {current_text[:50]}...")
             continue
         
         # Split into words
@@ -530,7 +563,9 @@ def deduplicate_subtitle_text(
         
         # Find longest overlap: prev_suffix == curr_prefix
         max_overlap = 0
-        max_check = min(len(prev_words), len(curr_words) // 2)
+        max_check = min(len(prev_words), len(curr_words) - min_overlap_words + 1)
+        
+        logger.debug(f"Segment {seg.index}: Checking overlap range {min_overlap_words} to {max_check} words (prev={len(prev_words)}, curr={len(curr_words)})")
         
         for overlap_len in range(min_overlap_words, max_check + 1):
             prev_suffix = ' '.join(prev_words[-overlap_len:])
@@ -542,14 +577,27 @@ def deduplicate_subtitle_text(
         # Also check for substring matches (one text contains the other)
         # Only apply if texts are reasonably long to avoid false positives
         if max_overlap == 0 and len(current_text) > 20:
-            # Check if current is a substring of previous or vice versa
-            if current_text in prev_added_text:
+            current_norm = normalize_text(current_text)
+            prev_norm = normalize_text(prev_added_text)
+            logger.debug(f"Segment {seg.index}: Normalized substring check - prev_norm in curr_norm: {prev_norm in current_norm}")
+            if current_norm in prev_norm:
                 # Current is contained in previous - skip current
                 continue
-            elif prev_added_text in current_text:
-                # Previous is contained in current - keep current, it's more complete
-                # Replace the last added segment with this more complete one
-                deduplicated[-1] = seg
+            elif prev_norm in current_norm:
+                # Previous is contained in current - keep previous, add only new portion
+                overlap_start = current_text.find(prev_added_text)
+                overlap_end = overlap_start + len(prev_added_text)
+                new_text = current_text[overlap_end:].strip()
+                if new_text:
+                    new_seg = SubtitleSegment(
+                        start_time=seg.start_time,
+                        end_time=seg.end_time,
+                        text=new_text,
+                        index=seg.index
+                    )
+                    deduplicated.append(new_seg)
+                    logger.debug(f"Segments {deduplicated[-2].index} and {seg.index}: Removed substring overlap ({len(prev_added_text)} chars) - overlap: '{prev_added_text[:50]}...', remaining: '{new_text[:50]}...'")
+                # If new_text empty, skip
                 continue
         
         if max_overlap > 0:
@@ -565,10 +613,28 @@ def deduplicate_subtitle_text(
                     index=seg.index
                 )
                 deduplicated.append(new_seg)
-            # If new_text is empty, skip this segment
+                logger.debug(f"Segment {seg.index}: Removed {max_overlap} overlapping words, text length {len(current_text)} -> {len(new_text)} - '{current_text[:50]}...' -> '{new_text[:50]}...'")
+                # Post-trim normalized substring check
+                trimmed_text = deduplicated[-1].text
+                trimmed_norm = normalize_text(trimmed_text)
+                prev_norm = normalize_text(prev_added_text)
+                if prev_norm in trimmed_norm:
+                    overlap_start = trimmed_text.find(prev_added_text)
+                    if overlap_start != -1:
+                        overlap_end = overlap_start + len(prev_added_text)
+                        remaining_text = trimmed_text[overlap_end:].strip()
+                        if len(remaining_text) > 3:
+                            deduplicated[-1].text = remaining_text
+                            logger.debug(f"Segment {seg.index}: Post-trim normalized check removed additional {len(prev_norm)} chars - '{trimmed_text[:50]}...' -> '{remaining_text[:50]}...'")
+                        else:
+                            deduplicated.pop()
+                            logger.debug(f"Segment {seg.index}: Post-trim check removed entire segment (remaining too short)")
+            # If new_text is empty, skip
         else:
             deduplicated.append(seg)
-    
+
+    logger.info(f"Deduplication summary: {len(segments)} -> {len(deduplicated)} segments ({len(segments) - len(deduplicated)} removed, {((len(segments) - len(deduplicated)) / len(segments) * 100):.1f}%)")
+
     return deduplicated
 
 
@@ -1385,7 +1451,13 @@ def parse_args():
         action="store_true",
         help="Append to existing dataset instead of overwriting (continues numbering)"
     )
-    
+
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging to see detailed deduplication operations"
+    )
+
     return parser.parse_args()
 
 
@@ -1438,7 +1510,12 @@ def get_existing_manifest_info(manifest_path: Path) -> Tuple[int, int, int]:
 
 def main():
     args = parse_args()
-    
+
+    if args.debug:
+        logging.basicConfig(level=logging.DEBUG, format='%(levelname)s: %(message)s')
+    else:
+        logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+
     if not args.input_dir.exists():
         print(f"Error: Input directory does not exist: {args.input_dir}")
         sys.exit(1)
