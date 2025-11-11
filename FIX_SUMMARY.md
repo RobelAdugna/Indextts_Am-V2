@@ -14,8 +14,9 @@ Your dataset manifest had **50% overlapping text** between neighboring segments 
 
 ## What Was Fixed
 
-Changed in `tools/create_amharic_dataset.py`:
+**Two critical bugs fixed in `tools/create_amharic_dataset.py`:**
 
+### Bug 1: Wrong Comparison Target
 ```python
 # BEFORE (BUGGY)
 prev_added_text = deduplicated[-1].text  # Wrong: last ADDED segment
@@ -24,7 +25,24 @@ prev_added_text = deduplicated[-1].text  # Wrong: last ADDED segment
 prev_text = segments[i-1].text  # Correct: previous INPUT segment
 ```
 
-This ensures rolling text is properly detected and removed, even when some segments are skipped.
+### Bug 2: Text Cleaning Order  
+```python
+# BEFORE (BUGGY)
+1. Parse SRT
+2. Deduplicate on RAW text
+3. Clean text (removes [Music], HTML, etc.)
+4. Normalize text
+# Result: Cleaning can reintroduce overlaps!
+
+# AFTER (FIXED)
+1. Parse SRT
+2. Clean text FIRST
+3. Deduplicate on CLEANED text
+4. Normalize text
+# Result: Dedup sees final word boundaries
+```
+
+Both fixes are required to eliminate overlapping text.
 
 ## How to Fix Your Dataset
 

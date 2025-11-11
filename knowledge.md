@@ -186,7 +186,10 @@ python tools/fix_vocal_subtitles.py --vocal-dir amharic_vocals --original-dir am
 **Toggle:** Dataset Creation tab checkbox (enabled by default)
 **Result:** Clean, unique text per segment while audio stays aligned
 
-**Recent Fix (2025-01):** Fixed critical bug where deduplication compared with last ADDED segment instead of previous INPUT segment, causing overlaps to be missed when intermediate segments were skipped. Now correctly removes all rolling text overlaps. See `DEDUPLICATION_FIX.md` for details.
+**Critical Fixes (2025-01):** 
+1. Deduplication compared with last ADDED segment instead of previous INPUT segment, causing overlaps when segments were skipped
+2. Text cleaning happened AFTER deduplication, allowing cleaned text to reintroduce overlaps
+**Solution:** Clean text BEFORE dedup, and compare with previous INPUT segment. See `DEDUPLICATION_FIX.md` for details.
 
 ## Segmentation V2: Production-Grade Implementation
 

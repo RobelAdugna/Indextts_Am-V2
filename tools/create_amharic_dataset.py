@@ -975,7 +975,18 @@ def segment_audio(
     else:
         raise ValueError(f"Unsupported subtitle format: {subtitle_path.suffix}")
     
+    # Clean text BEFORE deduplication to ensure consistent comparison
+    # Also filter out empty segments (e.g., segments with only [Music] markers)
+    cleaned_segments = []
+    for seg in segments:
+        cleaned = clean_subtitle_text(seg.text)
+        if cleaned and cleaned.strip():  # Only keep non-empty
+            seg.text = cleaned
+            cleaned_segments.append(seg)
+    segments = cleaned_segments
+    
     # Deduplicate overlapping text (common in rolling subtitles)
+    # This must happen AFTER cleaning but BEFORE normalization
     if enable_text_dedup:
         segments = deduplicate_subtitle_text(segments, min_overlap_words=min_overlap_words)
     
@@ -1021,15 +1032,9 @@ def segment_audio(
             quality_stats['rejection_reasons']['duration'] += 1
             continue
         
-        # Clean and normalize text
-        cleaned_text = clean_subtitle_text(seg.text)
-        
-        # Skip if cleaning removed all text (e.g., was only [ሙዚቃ])
-        if not cleaned_text or len(cleaned_text.strip()) == 0:
-            quality_stats['rejected'] += 1
-            quality_stats['rejection_reasons'].setdefault('music_or_sound_only', 0)
-            quality_stats['rejection_reasons']['music_or_sound_only'] += 1
-            continue
+        # Text was already cleaned and filtered before deduplication
+        # Now just normalize it (empty segments were already removed)
+        cleaned_text = seg.text  # Already cleaned and verified non-empty above
         
         text = normalizer.normalize(cleaned_text, language="am")
         if not text or len(text.strip()) == 0:
