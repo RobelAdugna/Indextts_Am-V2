@@ -507,21 +507,17 @@ def deduplicate_subtitle_text(
             deduplicated.append(seg)
             continue
         
-        # Compare with the LAST ADDED segment (not the previous input segment)
-        # This ensures we don't skip segments when there are duplicates
-        if not deduplicated:
-            deduplicated.append(seg)
-            continue
-        
-        prev_added_text = deduplicated[-1].text
+        # Compare with the PREVIOUS INPUT segment to detect rolling text
+        # This works correctly even when previous segments were skipped
+        prev_text = segments[i-1].text
         
         # Check for exact duplicate (same text in overlapping timestamps)
-        if current_text == prev_added_text:
+        if current_text == prev_text:
             # Skip this segment entirely - it's a complete duplicate
             continue
         
         # Split into words
-        prev_words = prev_added_text.split()
+        prev_words = prev_text.split()
         curr_words = current_text.split()
         
         if len(prev_words) < min_overlap_words or len(curr_words) < min_overlap_words:
@@ -543,14 +539,14 @@ def deduplicate_subtitle_text(
         # Only apply if texts are reasonably long to avoid false positives
         if max_overlap == 0 and len(current_text) > 20:
             # Check if current is a substring of previous or vice versa
-            if current_text in prev_added_text:
+            if current_text in prev_text:
                 # Current is contained in previous - skip current
                 continue
-            elif prev_added_text in current_text:
+            elif prev_text in current_text:
                 # Previous is contained in current - keep current, it's more complete
-                # Replace the last added segment with this more complete one
-                deduplicated[-1] = seg
-                continue
+                # But we can't replace previous if it was already skipped
+                # Just add current with full text
+                pass
         
         if max_overlap > 0:
             # Remove overlap from current
