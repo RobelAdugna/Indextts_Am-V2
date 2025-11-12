@@ -454,6 +454,40 @@ python tools/download_checkpoints.py
 - Auto-downloads missing files before training
 - Safe to interrupt and resume
 
+## Preprocessing
+
+### Resume Capability
+**Feature:** Automatic checkpoint/resume for interrupted preprocessing runs
+**How it works:**
+- Progress saved to `.preprocessing_progress.txt` after each sample
+- Automatically skips already-processed samples on restart
+- Handles crashes, OOM errors, and Ctrl+C gracefully
+- Flushes manifest files immediately (no data loss)
+
+**Usage:**
+```bash
+# Start preprocessing
+python tools/preprocess_data.py --manifest dataset/manifest.jsonl --output-dir preprocessed --tokenizer tokenizers/bpe.model --language am
+
+# If interrupted/crashed, just rerun same command - it will resume automatically!
+```
+
+**Manual cleanup (if needed):**
+```bash
+# Remove checkpoint to start fresh
+rm preprocessed/.preprocessing_progress.txt
+```
+
+### OOM Handling
+**Problem:** GPU runs out of memory during preprocessing
+**Solutions:**
+1. Reduce `--batch-size` (e.g., from 16 to 8 or 4)
+2. Script auto-detects GPU VRAM and sets optimal batch size
+3. Clear cache on OOM and retry with smaller batch
+
+**L4 GPU (22GB):** Default batch_size=32 → try 16 if OOM
+**Other GPUs:** Auto-sized based on VRAM
+
 ## Common Issues & Solutions
 
 ### YouTube Downloader Enhancements

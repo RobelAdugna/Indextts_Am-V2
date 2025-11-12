@@ -395,16 +395,22 @@ def process_batch(
     sample_rates = [item["sr"] for item in prepared]
     feat, attention_mask = semantic_extractor.extract(waveforms, sample_rates)
 
-    with torch.inference_mode():
-        semantic_code, _ = semantic_codec.quantize(feat)
-        if semantic_code.dim() == 1:
-            semantic_code = semantic_code.unsqueeze(0)
-        semantic_code = semantic_code.detach().cpu().numpy().astype(np.int32)
-        cond_lengths = attention_mask.sum(dim=1).long()
-        feat_t = feat.transpose(1, 2)
-        cond_lengths_device = cond_lengths.to(feat.device)
-        conditioning = gpt.get_conditioning(feat_t, cond_lengths_device)
-        emo_vec = gpt.get_emovec(feat, cond_lengths_device)
+    try:
+        with torch.inference_mode():
+            semantic_code, _ = semantic_codec.quantize(feat)
+            if semantic_code.dim() == 1:
+                semantic_code = semantic_code.unsqueeze(0)
+            semantic_code = semantic_code.detach().cpu().numpy().astype(np.int32)
+            cond_lengths = attention_mask.sum(dim=1).long()
+            feat_t = feat.transpose(1, 2)
+            cond_lengths_device = cond_lengths.to(feat.device)
+            conditioning = gpt.get_conditioning(feat_t, cond_lengths_device)
+            emo_vec = gpt.get_emovec(feat, cond_lengths_device)
+    except RuntimeError as e:
+        if "out of memory" in str(e).lower():
+            print(f"\nGPU OOM on batch of {len(prepared)} samples. Try reducing --batch-size.")
+            torch.cuda.empty_cache()
+        raise
 
     conditioning_np = conditioning.detach().cpu().numpy().astype(np.float32)
     emo_vec_np = emo_vec.detach().cpu().numpy().astype(np.float32)
@@ -479,6 +485,23 @@ def parse_dataset_spec(spec: str, output_root: Optional[Path]) -> tuple[str, Pat
     return lang, manifest, output_dir
 
 
+def load_progress(progress_path: Path) -> set[str]:
+    """Load set of already processed IDs from checkpoint."""
+    if progress_path.exists():
+        with open(progress_path, "r", encoding="utf-8") as f:
+            return set(line.strip() for line in f if line.strip())
+    return set()
+
+
+def save_progress_batch(progress_path: Path, processed_ids: list[str]) -> None:
+    """Append multiple processed IDs to checkpoint file (batched for performance)."""
+    if not processed_ids:
+        return
+    with open(progress_path, "a", encoding="utf-8") as f:
+        for pid in processed_ids:
+            f.write(f"{pid}\n")
+
+
 def preprocess_dataset(
     manifest_path: Path,
     output_dir: Path,
@@ -500,6 +523,12 @@ def preprocess_dataset(
     output_dir = output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     dirs = ensure_dirs(output_dir)
+    
+    # Checkpoint for resume capability
+    progress_path = output_dir / ".preprocessing_progress.txt"
+    processed_ids_checkpoint = load_progress(progress_path)
+    if processed_ids_checkpoint:
+        print(f"[Resume] Found {len(processed_ids_checkpoint)} already-processed samples")
 
     tokenizer = TextTokenizer(
         str(tokenizer_path),
@@ -519,6 +548,7 @@ def preprocess_dataset(
     processed = 0
     skipped = 0
     pending: List[Dict[str, Any]] = []
+    checkpoint_buffer: List[str] = []  # Batch checkpoint writes
     audio_roots = list(
         dict.fromkeys(
             [
@@ -557,31 +587,63 @@ def preprocess_dataset(
             skipped += batch_skipped
             pending = pending[limit:]
             for entry in entries:
-                is_val = assign_to_validation(entry["id"], args.val_ratio)
-                if is_val:
-                    if entry["id"] not in val_ids:
-                        val_file.write(json.dumps(entry, ensure_ascii=False) + "\n")
-                        val_ids.add(entry["id"])
-                else:
-                    if entry["id"] not in train_ids:
-                        train_file.write(json.dumps(entry, ensure_ascii=False) + "\n")
-                        train_ids.add(entry["id"])
-                processed += 1
-                if args.max_samples and processed >= args.max_samples:
-                    pending.clear()
-                    return
+                try:
+                    is_val = assign_to_validation(entry["id"], args.val_ratio)
+                    if is_val:
+                        if entry["id"] not in val_ids:
+                            val_file.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                            val_file.flush()  # Ensure data is written immediately
+                            val_ids.add(entry["id"])
+                    else:
+                        if entry["id"] not in train_ids:
+                            train_file.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                            train_file.flush()  # Ensure data is written immediately
+                            train_ids.add(entry["id"])
+                    
+                    # Buffer checkpoint writes (batch every 10 samples)
+                    checkpoint_buffer.append(entry["id"])
+                    processed_ids_checkpoint.add(entry["id"])
+                    processed += 1
+                    
+                    # Flush checkpoint buffer periodically
+                    if len(checkpoint_buffer) >= 10:
+                        save_progress_batch(progress_path, checkpoint_buffer)
+                        checkpoint_buffer.clear()
+                    
+                    if args.max_samples and processed >= args.max_samples:
+                        pending.clear()
+                        return
+                except Exception as e:
+                    print(f"Warning: Failed to write entry {entry['id']}: {e}")
+                    skipped += 1
 
     try:
         with open(manifest_path, "r", encoding="utf-8") as source:
             for line in tqdm(source, desc=f"Preprocessing [{dataset_language}]", unit="sample"):
                 if args.max_samples and processed >= args.max_samples:
                     break
-                record = json.loads(line)
-                uid = record["id"]
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError as e:
+                    print(f"Warning: Skipping malformed JSON line: {e}")
+                    skipped += 1
+                    continue
+                
+                uid = record.get("id")
+                if not uid:
+                    print("Warning: Skipping record with missing 'id' field")
+                    skipped += 1
+                    continue
+                
+                # Skip if already processed in previous run
+                if uid in processed_ids_checkpoint:
+                    continue
+                
                 if args.skip_existing and (
                     (output_dir / "codes" / f"{uid}.npy").exists()
                     and (output_dir / "text_ids" / f"{uid}.npy").exists()
                 ):
+                    processed_ids_checkpoint.add(uid)
                     continue
 
                 pending.append(record)
@@ -589,6 +651,23 @@ def preprocess_dataset(
                 if args.max_samples and processed >= args.max_samples:
                     break
         flush(force=True)
+        # Final checkpoint flush
+        if checkpoint_buffer:
+            save_progress_batch(progress_path, checkpoint_buffer)
+            checkpoint_buffer.clear()
+    except KeyboardInterrupt:
+        print("\n[Interrupted] Saving progress before exit...")
+        flush(force=True)
+        if checkpoint_buffer:
+            save_progress_batch(progress_path, checkpoint_buffer)
+        raise
+    except Exception as e:
+        print(f"\n[Error] {type(e).__name__}: {e}")
+        print("[Recovery] Saving progress before crash...")
+        flush(force=True)
+        if checkpoint_buffer:
+            save_progress_batch(progress_path, checkpoint_buffer)
+        raise
     finally:
         train_file.close()
         val_file.close()
