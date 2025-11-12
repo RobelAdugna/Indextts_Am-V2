@@ -330,7 +330,8 @@ def process_batch(
     dirs: Dict[str, Path],
     audio_roots: Iterable[Path],
     executor: ThreadPoolExecutor | None,
-) -> Tuple[List[Dict[str, Any]], int]:
+    current_batch_size: int,
+) -> Tuple[List[Dict[str, Any]], int, bool]:
     prepared: List[Dict[str, Any]] = []
     skipped = 0
 
@@ -395,6 +396,7 @@ def process_batch(
     sample_rates = [item["sr"] for item in prepared]
     feat, attention_mask = semantic_extractor.extract(waveforms, sample_rates)
 
+    oom_occurred = False
     try:
         with torch.inference_mode():
             semantic_code, _ = semantic_codec.quantize(feat)
@@ -408,8 +410,11 @@ def process_batch(
             emo_vec = gpt.get_emovec(feat, cond_lengths_device)
     except RuntimeError as e:
         if "out of memory" in str(e).lower():
-            print(f"\nGPU OOM on batch of {len(prepared)} samples. Try reducing --batch-size.")
+            oom_occurred = True
+            print(f"\n[OOM] GPU out of memory on batch of {len(prepared)} samples")
+            print(f"[OOM] Current batch size: {current_batch_size} -> Will retry with smaller batches")
             torch.cuda.empty_cache()
+            return [], 0, True  # Signal OOM to retry with smaller batch
         raise
 
     conditioning_np = conditioning.detach().cpu().numpy().astype(np.float32)
@@ -447,7 +452,7 @@ def process_batch(
         }
         entries.append(entry)
 
-    return entries, skipped
+    return entries, skipped, False
 
 
 LANGUAGE_HINT_OVERRIDES: Dict[str, Optional[str]] = {
@@ -559,33 +564,107 @@ def preprocess_dataset(
         )
     )
 
+    # Dynamic batch size management
+    current_batch_size = batch_size
+    min_batch_size = 1
+    oom_consecutive_count = 0
+    max_oom_retries = 3
+    
     def flush(force: bool = False) -> None:
-        nonlocal pending, processed, skipped
+        nonlocal pending, processed, skipped, current_batch_size, oom_consecutive_count
         while pending and (
             force
-            or len(pending) >= batch_size
+            or len(pending) >= current_batch_size
             or (args.max_samples and processed + len(pending) >= args.max_samples)
         ):
-            limit = batch_size
+            limit = current_batch_size
             if args.max_samples:
                 remaining = args.max_samples - processed
                 if remaining <= 0:
                     pending.clear()
                     return
                 limit = min(limit, remaining)
+            
             batch_records = pending[:limit]
-            entries, batch_skipped = process_batch(
-                batch_records,
-                tokenizer,
-                semantic_codec,
-                semantic_extractor,
-                gpt,
-                dirs,
-                audio_roots=audio_roots,
-                executor=executor,
-            )
-            skipped += batch_skipped
-            pending = pending[limit:]
+            
+            # Adaptive retry logic for OOM
+            retry_count = 0
+            while retry_count < max_oom_retries:
+                try:
+                    entries, batch_skipped, oom_occurred = process_batch(
+                        batch_records,
+                        tokenizer,
+                        semantic_codec,
+                        semantic_extractor,
+                        gpt,
+                        dirs,
+                        audio_roots=audio_roots,
+                        executor=executor,
+                        current_batch_size=current_batch_size,
+                    )
+                    
+                    if oom_occurred:
+                        # OOM detected, reduce batch size and retry
+                        oom_consecutive_count += 1
+                        new_batch_size = max(min_batch_size, current_batch_size // 2)
+                        if new_batch_size == current_batch_size:
+                            # Can't reduce further, process one at a time
+                            print(f"[OOM] Already at minimum batch size ({min_batch_size}), processing sample by sample")
+                            # Process samples individually
+                            for single_sample in batch_records:
+                                single_entries, single_skipped, single_oom = process_batch(
+                                    [single_sample],
+                                    tokenizer,
+                                    semantic_codec,
+                                    semantic_extractor,
+                                    gpt,
+                                    dirs,
+                                    audio_roots=audio_roots,
+                                    executor=executor,
+                                    current_batch_size=1,
+                                )
+                                if not single_oom:
+                                    entries.extend(single_entries)
+                                    skipped += single_skipped
+                                else:
+                                    print(f"[FATAL] OOM even with batch_size=1, skipping sample {single_sample.get('id')}")
+                                    skipped += 1
+                                torch.cuda.empty_cache()
+                            pending = pending[limit:]
+                            break
+                        
+                        print(f"[OOM Recovery] Reducing batch size: {current_batch_size} -> {new_batch_size}")
+                        current_batch_size = new_batch_size
+                        # Adjust limit for retry
+                        limit = min(current_batch_size, len(batch_records))
+                        batch_records = pending[:limit]
+                        retry_count += 1
+                        torch.cuda.empty_cache()
+                        continue
+                    
+                    # Success - reset OOM counter and process results
+                    oom_consecutive_count = 0
+                    skipped += batch_skipped
+                    pending = pending[limit:]
+                    break
+                    
+                except Exception as e:
+                    print(f"[ERROR] Unexpected error during batch processing: {e}")
+                    # Skip this batch and continue
+                    skipped += len(batch_records)
+                    pending = pending[limit:]
+                    break
+            
+            if retry_count >= max_oom_retries:
+                print(f"[FATAL] Max OOM retries exceeded, skipping batch of {len(batch_records)} samples")
+                skipped += len(batch_records)
+                pending = pending[limit:]
+                continue
+            
+            # Clear GPU cache after each batch for memory hygiene
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
             for entry in entries:
                 try:
                     is_val = assign_to_validation(entry["id"], args.val_ratio)
@@ -695,23 +774,27 @@ def main() -> None:
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     
-    # Auto-detect optimal batch size and workers
+    # Auto-detect optimal batch size and workers with conservative estimates
     if args.batch_size == 0:
         if torch.cuda.is_available():
-            # GPU batch sizing based on VRAM
+            # GPU batch sizing based on VRAM (conservative for large models)
             vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-            if vram_gb >= 24:  # L4, RTX 3090/4090, A10
-                args.batch_size = 32
+            # Account for model weight overhead (~12-16GB for SeamlessM4T + GPT)
+            if vram_gb >= 40:  # A100 40GB+
+                args.batch_size = 24
+            elif vram_gb >= 24:  # L4, RTX 3090/4090, A10 (your case)
+                args.batch_size = 16  # Conservative for 24GB with large models
             elif vram_gb >= 16:  # V100, RTX 4080
-                args.batch_size = 16
-            elif vram_gb >= 12:  # T4, RTX 3060
-                args.batch_size = 12
-            elif vram_gb >= 8:  # RTX 3050
                 args.batch_size = 8
-            else:
+            elif vram_gb >= 12:  # T4, RTX 3060
+                args.batch_size = 6
+            elif vram_gb >= 8:  # RTX 3050
                 args.batch_size = 4
+            else:
+                args.batch_size = 2
             print(f"[Auto-Optimization] GPU detected: {torch.cuda.get_device_name(0)} ({vram_gb:.1f}GB)")
-            print(f"[Auto-Optimization] Using batch_size={args.batch_size} for preprocessing")
+            print(f"[Auto-Optimization] Starting with batch_size={args.batch_size} (will auto-adjust if OOM occurs)")
+            print(f"[Info] Dynamic OOM recovery enabled - batch size will reduce automatically on memory errors")
         else:
             args.batch_size = 1
             print("[Auto-Optimization] CPU mode: batch_size=1")

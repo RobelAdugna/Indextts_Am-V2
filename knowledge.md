@@ -478,15 +478,34 @@ python tools/preprocess_data.py --manifest dataset/manifest.jsonl --output-dir p
 rm preprocessed/.preprocessing_progress.txt
 ```
 
-### OOM Handling
-**Problem:** GPU runs out of memory during preprocessing
-**Solutions:**
-1. Reduce `--batch-size` (e.g., from 16 to 8 or 4)
-2. Script auto-detects GPU VRAM and sets optimal batch size
-3. Clear cache on OOM and retry with smaller batch
+### Dynamic OOM Handling (Auto-Recovery)
+**Feature:** Intelligent OOM detection and automatic batch size adjustment
+**How it works:**
+- Detects GPU out-of-memory errors during preprocessing
+- Automatically reduces batch size by 50% and retries
+- Falls back to single-sample processing if needed
+- Clears GPU cache between batches for memory hygiene
+- Continues processing without manual intervention
 
-**L4 GPU (22GB):** Default batch_size=32 → try 16 if OOM
-**Other GPUs:** Auto-sized based on VRAM
+**Example:**
+- Start: batch_size=16 (24GB GPU)
+- OOM detected → reduce to 8
+- OOM again → reduce to 4
+- OOM again → reduce to 2
+- OOM again → process one sample at a time
+
+**Benefits:**
+- No manual `--batch-size` tuning needed
+- Automatically finds optimal batch size for your GPU
+- Prevents preprocessing failures from OOM
+- Maximizes throughput while staying within VRAM limits
+
+**Conservative Starting Points (accounting for 12-16GB model overhead):**
+- **40GB+ (A100):** batch_size=24
+- **24GB (L4, RTX 3090/4090):** batch_size=16
+- **16GB (V100, RTX 4080):** batch_size=8
+- **12GB (T4, RTX 3060):** batch_size=6
+- **8GB (RTX 3050):** batch_size=4
 
 ## Common Issues & Solutions
 
