@@ -177,6 +177,33 @@ def get_optimal_preprocessing_workers() -> int:
     return workers
 
 
+def get_optimal_mdx_batch_size() -> int:
+    """
+    Auto-detect optimal MDX batch size for audio-separator based on GPU VRAM.
+    
+    Returns:
+        Optimal batch size (1-16 depending on hardware)
+    """
+    try:
+        if torch.cuda.is_available():
+            vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            if vram_gb >= 24:  # L4, RTX 3090/4090, A10
+                return 16
+            elif vram_gb >= 16:  # V100, RTX 4080
+                return 12
+            elif vram_gb >= 12:  # T4, RTX 3060
+                return 8
+            elif vram_gb >= 8:  # RTX 3050
+                return 6
+            else:
+                return 4
+    except (ImportError, RuntimeError):
+        pass
+    
+    # CPU fallback
+    return 1
+
+
 def print_hardware_summary(config: HardwareConfig) -> None:
     """
     Print a formatted summary of detected hardware and recommendations.

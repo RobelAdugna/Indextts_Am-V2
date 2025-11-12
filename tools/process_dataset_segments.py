@@ -115,7 +115,8 @@ def process_batch(
     audio_files: List[Path],
     separator: Separator,
     temp_dir: Path,
-    keep_backup: bool = False
+    keep_backup: bool = False,
+    cleanup_temp_files: bool = True
 ) -> List[Tuple[Path, bool, Optional[str]]]:
     """Process a chunk of audio segments sequentially (not parallel)
     
@@ -156,13 +157,14 @@ def process_batch(
             # Replace original with vocal version (maintains filename)
             shutil.move(str(vocal_file), str(audio_file))
             
-            # Clean up other separation outputs (instrumentals, etc.)
-            for temp_file in temp_dir.glob("*"):
-                if temp_file.exists():
-                    try:
-                        temp_file.unlink()
-                    except (OSError, PermissionError):
-                        pass
+            # Clean up temp directory completely if requested
+            if cleanup_temp_files:
+                for temp_file in temp_dir.glob("*"):
+                    if temp_file.exists():
+                        try:
+                            temp_file.unlink()
+                        except (OSError, PermissionError):
+                            pass
             
             results.append((audio_file, True, None))
         
@@ -176,7 +178,8 @@ def process_segment(
     audio_file: Path,
     separator: Separator,
     temp_dir: Path,
-    keep_backup: bool = False
+    keep_backup: bool = False,
+    cleanup_temp_files: bool = True
 ) -> Tuple[bool, Optional[str]]:
     """Process a single audio segment to remove background noise
     
@@ -210,13 +213,14 @@ def process_segment(
         # Replace original with vocal version (maintains filename)
         shutil.move(str(vocal_file), str(audio_file))
         
-        # Clean up other separation outputs (instrumentals, etc.)
-        for temp_file in temp_dir.glob("*"):
-            if temp_file.exists():
-                try:
-                    temp_file.unlink()
-                except (OSError, PermissionError):
-                    pass
+        # Clean up temp directory completely if requested
+        if cleanup_temp_files:
+            for temp_file in temp_dir.glob("*"):
+                if temp_file.exists():
+                    try:
+                        temp_file.unlink()
+                    except (OSError, PermissionError):
+                        pass
         
         return True, None
     
@@ -233,7 +237,7 @@ def process_dataset(
     batch_size: int = 10,
     chunk_size: int = 1,
     use_autocast: bool = True,
-    mdx_batch_size: int = 4,
+    mdx_batch_size: Optional[int] = None,
     normalization: float = 0.9
 ) -> Dict[str, any]:
     """Process entire dataset directory
@@ -279,6 +283,28 @@ def process_dataset(
     temp_dir = Path(tempfile.mkdtemp(prefix="segment_processing_"))
     
     try:
+        # Auto-detect optimal batch size if not specified
+        if mdx_batch_size is None:
+            import sys
+            import os
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(current_dir)
+            if project_root not in sys.path:
+                sys.path.insert(0, project_root)
+            
+            from indextts.utils.hardware_optimizer import get_optimal_mdx_batch_size
+            mdx_batch_size = get_optimal_mdx_batch_size()
+            
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                    logging.info(f"🚀 Auto-detected: {vram_gb:.1f}GB VRAM → batch_size={mdx_batch_size}")
+                else:
+                    logging.warning(f"⚠️ CPU mode: batch_size={mdx_batch_size} (very slow)")
+            except ImportError:
+                logging.warning(f"⚠️ CPU mode: batch_size={mdx_batch_size} (very slow)")
+        
         # Initialize separator with GPU optimizations
         print("Initializing audio separator with GPU optimizations...")
         separator = Separator(
@@ -296,17 +322,17 @@ def process_dataset(
         
         separator.load_model(model_filename=model_name, **model_params)
         
-        # Check GPU availability
+        # Report GPU status and optimizations
         try:
             import torch
             if torch.cuda.is_available():
-                logging.info(f"✓ Using GPU acceleration (CUDA {torch.version.cuda})")
-                logging.info(f"  GPU: {torch.cuda.get_device_name(0)}")
+                logging.info(f"✓ GPU: {torch.cuda.get_device_name(0)} (CUDA {torch.version.cuda})")
                 logging.info(f"  VRAM: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+                logging.info(f"  Optimizations: batch_size={mdx_batch_size}, autocast={use_autocast}")
             else:
-                logging.warning("⚠ Using CPU (slower)")
-        except Exception as e:
-            logging.warning(f"⚠ Using CPU (slower) - Could not detect GPU: {e}")
+                logging.warning("⚠ CPU mode (50-100x slower than GPU)")
+        except ImportError:
+            logging.warning("⚠ CPU mode (50-100x slower than GPU)")
         
         # Process files
         stats = {
@@ -336,7 +362,8 @@ def process_dataset(
                 batch,
                 separator,
                 temp_dir,
-                keep_backup=keep_backup
+                keep_backup=keep_backup,
+                cleanup_temp_files=True
             )
             
             # Update statistics
@@ -505,8 +532,8 @@ def parse_args():
     parser.add_argument(
         "--mdx-batch-size",
         type=int,
-        default=4,
-        help="Batch size for MDX models (default: 4, increase to 8-16 for GPUs with more VRAM)"
+        default=None,
+        help="Batch size for MDX models (auto-detected based on GPU VRAM if not specified)"
     )
     
     parser.add_argument(

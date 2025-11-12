@@ -193,6 +193,7 @@ def remove_background_music(
     input_dir: str,
     output_dir: str,
     model_name: str = "UVR_MDXNET_KARA_2.onnx",
+    cleanup_source: bool = True,
     progress=gr.Progress()
 ) -> Tuple[str, str]:
     """Remove background music from audio files and copy subtitle files"""
@@ -267,6 +268,7 @@ def remove_background_music(
         
         renamed_count = 0
         deleted_instrumental_count = 0
+        cleaned_source_count = 0
         
         for i, f in enumerate(audio_files):
             file_start = time.time()
@@ -331,6 +333,28 @@ def remove_background_music(
                 else:
                     subtitle_stats['not_found'] += 1
                     logs.append(f"  ℹ️  No subtitle found for {f.name}")
+                
+                # Clean up source files after successful processing
+                if cleanup_source:
+                    # Remove original audio from input directory
+                    if f.exists():
+                        f.unlink()
+                        cleaned_source_count += 1
+                        logs.append(f"  🗑️ Cleaned source: {f.name}")
+                    
+                    # Remove subtitle files
+                    for ext in ['.srt', '.vtt', '.webvtt']:
+                        for lang in ['', '.am', '.amh', '.en', '.en-US']:
+                            subtitle = f.parent / f"{f.stem}{lang}{ext}"
+                            if subtitle.exists():
+                                subtitle.unlink()
+                                logs.append(f"  🗑️ Cleaned subtitle: {subtitle.name}")
+                    
+                    # Remove .info.json
+                    info_file = f.with_suffix('.info.json')
+                    if info_file.exists():
+                        info_file.unlink()
+                        logs.append(f"  🗑️ Cleaned metadata: {info_file.name}")
                     
             except Exception as e:
                 logs.append(f"✗ {f.name}: {e}")
@@ -342,6 +366,8 @@ def remove_background_music(
         # Add processing stats
         logs.append(f"\n✅ Files auto-renamed: {renamed_count}")
         logs.append(f"🗑️ Instrumental files deleted: {deleted_instrumental_count}")
+        if cleanup_source:
+            logs.append(f"🗑️ Source files cleaned: {cleaned_source_count}")
         
         # Add subtitle stats
         if subtitle_stats['copied'] > 0 or subtitle_stats['not_found'] > 0:
@@ -1079,6 +1105,12 @@ def create_ui():
                     value="UVR_MDXNET_KARA_2.onnx"
                 )
                 
+                music_cleanup_source = gr.Checkbox(
+                    label="Clean up source files after processing",
+                    value=True,
+                    info="Delete original audio+subtitles after successful vocal extraction"
+                )
+                
                 remove_music_btn = gr.Button("🎵 Remove Music", variant="secondary")
                 music_logs = gr.Textbox(label="Logs", lines=8)
                 music_status = gr.Textbox(label="Status")
@@ -1098,7 +1130,7 @@ def create_ui():
             
             remove_music_btn.click(
                 remove_background_music,
-                inputs=[music_input_dir, music_output_dir, music_model],
+                inputs=[music_input_dir, music_output_dir, music_model, music_cleanup_source],
                 outputs=[music_logs, music_status]
             )
         

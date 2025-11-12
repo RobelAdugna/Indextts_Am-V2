@@ -387,34 +387,69 @@ def remove_background_noise(
     audio_file: Path,
     output_dir: Path,
     model_name: str = "UVR-MDX-NET-Inst_HQ_3",
-    keep_original: bool = False
+    keep_original: bool = False,
+    mdx_batch_size: Optional[int] = None,
+    use_autocast: bool = True,
+    cleanup_source: bool = True
 ) -> Optional[Path]:
-    """Remove background music/noise from audio file
+    """Remove background music/noise from audio file with GPU optimization
     
     Args:
         audio_file: Input audio file
         output_dir: Output directory for processed audio
         model_name: audio-separator model to use
         keep_original: If False, replace original with vocal-only version
+        mdx_batch_size: Batch size for MDX models (auto-detected if None)
+        use_autocast: Use mixed precision for GPU acceleration
     
     Returns:
         Path to processed audio file or None on failure
     """
     try:
         from audio_separator.separator import Separator
+        import sys
+        import os
+        
+        # Add project root to path for imports
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(current_dir)
+        if project_root not in sys.path:
+            sys.path.insert(0, project_root)
+        
+        from indextts.utils.hardware_optimizer import get_optimal_mdx_batch_size
         
         output_dir.mkdir(parents=True, exist_ok=True)
         
+        # Auto-detect optimal batch size if not specified
+        if mdx_batch_size is None:
+            mdx_batch_size = get_optimal_mdx_batch_size()
+        
         print(f"  Removing background noise from: {audio_file.name}")
         
-        # Initialize separator
+        try:
+            import torch
+            if torch.cuda.is_available():
+                print(f"  🚀 GPU: {torch.cuda.get_device_name(0)} (batch_size={mdx_batch_size})")
+            else:
+                print(f"  ⚠️ CPU mode (batch_size={mdx_batch_size}, very slow)")
+        except ImportError:
+            print(f"  ⚠️ CPU mode (batch_size={mdx_batch_size}, very slow)")
+        
+        # Initialize separator with GPU optimizations
         separator = Separator(
             output_dir=str(output_dir),
-            output_format="WAV"
+            output_format="WAV",
+            normalization_threshold=0.9
         )
         
-        # Load model
-        separator.load_model(model_filename=model_name)
+        # Load model with GPU-specific parameters
+        model_params = {}
+        if use_autocast:
+            model_params['use_autocast'] = True
+        if 'mdx' in model_name.lower():
+            model_params['mdx_batch_size'] = mdx_batch_size
+        
+        separator.load_model(model_filename=model_name, **model_params)
         
         # Separate vocals
         output_files = separator.separate(str(audio_file))
@@ -429,10 +464,45 @@ def remove_background_noise(
         if vocal_file and vocal_file.exists():
             print(f"  ✓ Noise removed: {vocal_file.name}")
             
+            # Clean up temporary separation files (instrumentals, etc.)
+            for temp_file in output_dir.glob(f"{audio_file.stem}*"):
+                if temp_file != vocal_file and temp_file != audio_file:
+                    try:
+                        temp_file.unlink()
+                    except (OSError, PermissionError):
+                        pass
+            
             if not keep_original:
                 # Replace original with vocal version
                 shutil.move(str(vocal_file), str(audio_file))
                 print(f"  Replaced original with noise-free version")
+                
+                # Clean up source audio and subtitle if requested
+                if cleanup_source:
+                    # Find and remove matching subtitle files
+                    subtitle_exts = ['.srt', '.vtt', '.webvtt']
+                    lang_codes = ['am', 'amh', 'en', 'en-US']
+                    
+                    for ext in subtitle_exts:
+                        # Try exact match
+                        subtitle = audio_file.with_suffix(ext)
+                        if subtitle.exists():
+                            subtitle.unlink()
+                            print(f"  🗑️ Cleaned up: {subtitle.name}")
+                        
+                        # Try with language codes
+                        for lang in lang_codes:
+                            subtitle = audio_file.parent / f"{audio_file.stem}.{lang}{ext}"
+                            if subtitle.exists():
+                                subtitle.unlink()
+                                print(f"  🗑️ Cleaned up: {subtitle.name}")
+                    
+                    # Also remove .info.json if exists
+                    info_file = audio_file.with_suffix('.info.json')
+                    if info_file.exists():
+                        info_file.unlink()
+                        print(f"  🗑️ Cleaned up: {info_file.name}")
+                
                 return audio_file
             else:
                 return vocal_file
@@ -459,7 +529,10 @@ def download_from_file(
     cleanup_no_subs: bool = True,
     cleanup_temp: bool = True,
     remove_noise: bool = False,
-    noise_model: str = "UVR-MDX-NET-Inst_HQ_3"
+    noise_model: str = "UVR-MDX-NET-Inst_HQ_3",
+    mdx_batch_size: Optional[int] = None,
+    use_autocast: bool = True,
+    cleanup_source_after_noise_removal: bool = True
 ) -> dict:
     """Download videos from a file containing URLs
     
@@ -525,7 +598,10 @@ def download_from_file(
                     audio_file,
                     output_dir,
                     model_name=noise_model,
-                    keep_original=False
+                    keep_original=False,
+                    mdx_batch_size=mdx_batch_size,
+                    use_autocast=use_autocast,
+                    cleanup_source=cleanup_source_after_noise_removal
                 )
                 if vocal_file:
                     results['noise_removed'] += 1
@@ -645,6 +721,25 @@ def parse_args():
         help="audio-separator model for noise removal (default: UVR-MDX-NET-Inst_HQ_3)"
     )
     
+    parser.add_argument(
+        "--mdx-batch-size",
+        type=int,
+        default=None,
+        help="MDX model batch size (auto-detected if not specified)"
+    )
+    
+    parser.add_argument(
+        "--no-autocast",
+        action="store_true",
+        help="Disable autocast (mixed precision) for GPU"
+    )
+    
+    parser.add_argument(
+        "--keep-source",
+        action="store_true",
+        help="Keep original audio and subtitle files after noise removal (default: delete them)"
+    )
+    
     return parser.parse_args()
 
 
@@ -682,7 +777,10 @@ def main():
             remove_background_noise(
                 audio_file,
                 args.output_dir,
-                model_name=args.noise_model
+                model_name=args.noise_model,
+                mdx_batch_size=args.mdx_batch_size,
+                use_autocast=not args.no_autocast,
+                cleanup_source=not args.keep_source
             )
         
         sys.exit(0 if success else 1)
@@ -699,7 +797,10 @@ def main():
             cleanup_no_subs=cleanup_no_subs,
             cleanup_temp=cleanup_temp,
             remove_noise=args.remove_noise,
-            noise_model=args.noise_model
+            noise_model=args.noise_model,
+            mdx_batch_size=args.mdx_batch_size,
+            use_autocast=not args.no_autocast,
+            cleanup_source_after_noise_removal=not args.keep_source
         )
         
         print("\n" + "="*50)

@@ -541,6 +541,8 @@ rm preprocessed/.preprocessing_progress.txt
 - Default model: UVR-MDX-NET-Inst_HQ_4.onnx (good balance)
 - Requires: `pip install audio-separator`
 - Replaces original files with noise-free versions
+- **Auto-cleanup:** Deletes source audio+srt files after successful processing (use `--keep-source` to disable)
+- **Temp cleanup:** Automatically removes instrumental files and temp directories
 
 **Usage Examples:**
 ```bash
@@ -606,10 +608,26 @@ python tools/create_amharic_dataset.py \
   --quality-report quality.json
 ```
 
-### Music Removal GPU Acceleration
-**Issue:** audio-separator using CPU despite GPU available
-**Fix:** Newer versions (>=0.20.0) auto-detect CUDA. Remove `use_cuda=` parameter.
-**Note:** Install base package without `[cpu]` extra for GPU support.
+### Music Removal GPU Acceleration (Enhanced)
+**Auto-Detection:** Both `youtube_amharic_downloader.py` and `process_dataset_segments.py` now use `get_optimal_mdx_batch_size()` from `hardware_optimizer.py`:
+- **24GB+ (L4, 3090, 4090):** batch_size=16 (maximum throughput)
+- **16GB (V100, 4080):** batch_size=12
+- **12GB (T4, 3060):** batch_size=8
+- **8GB (3050):** batch_size=6
+- **<8GB or CPU:** batch_size=4 or 1
+
+**CLI Flags:**
+- `--mdx-batch-size N` - Override auto-detection (not recommended, may cause OOM)
+- `--no-autocast` - Disable mixed precision if issues occur
+
+**Installation:**
+- GPU: `pip install audio-separator` (auto-detects CUDA)
+- For ONNX GPU acceleration: `pip uninstall onnxruntime -y && pip install onnxruntime-gpu`
+- CPU-only: `pip install 'audio-separator[cpu]'`
+
+**Performance:** GPU is 50-100x faster than CPU. Auto-batch sizing maximizes GPU utilization without manual tuning.
+
+**Implementation:** Shared utility in `indextts/utils/hardware_optimizer.py` eliminates code duplication and ensures consistent behavior.
 
 ### NumPy 2.x Compatibility Error
 **Error:** `ImportError: A module that was compiled using NumPy 1.x cannot be run in NumPy 2.3.4`
