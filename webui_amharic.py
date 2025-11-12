@@ -765,7 +765,6 @@ def preprocess_data(
     gpt_checkpoint: str,
     language: str,
     val_ratio: float,
-    batch_size: int,
     progress=gr.Progress()
 ) -> Tuple[str, str, Dict]:
     """Preprocess data for training"""
@@ -808,7 +807,7 @@ def preprocess_data(
         "--gpt-checkpoint", gpt_checkpoint,
         "--language", language,
         "--val-ratio", str(val_ratio),
-        "--batch-size", str(batch_size),
+        # batch_size auto-detected by preprocess_data.py
     ]
     
     try:
@@ -1468,13 +1467,11 @@ def create_ui():
                             value=0.01,
                             step=0.01
                         )
-                        preprocess_batch_size = gr.Slider(
-                            label="Batch Size",
-                            minimum=1,
-                            maximum=16,
-                            value=4,
-                            step=1
-                        )
+                    
+                    gr.Markdown("""
+                    **⚡ GPU Optimization:** Batch size is auto-detected based on your GPU VRAM (L4 22GB→16, V100→16).
+                    Preprocessing uses large pretrained models (12-16GB VRAM), so 30-60% GPU utilization is normal and expected.
+                    """)
                     
                     preprocess_btn = gr.Button("⚙️ Preprocess Data", variant="primary", size="lg")
                 
@@ -1487,7 +1484,7 @@ def create_ui():
                 inputs=[
                     preprocess_manifest, preprocess_output_dir, preprocess_tokenizer,
                     preprocess_config, preprocess_checkpoint, preprocess_language,
-                    preprocess_val_ratio, preprocess_batch_size
+                    preprocess_val_ratio
                 ],
                 outputs=[preprocess_logs, preprocess_status, state]
             ).then(

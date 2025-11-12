@@ -109,8 +109,9 @@ To add support for a new language, follow the pattern established for Amharic:
    - Tokenize text
    - Generate conditioning vectors (GPU-accelerated)
    - Split train/validation
-   - **Performance:** Auto-detects optimal batch size (L4 24GB→32, V100 16GB→16) for 80-95% GPU utilization
-   - **Important:** Preprocessing is I/O + GPU hybrid - batch size determines GPU saturation
+   - **Performance:** Auto-detects batch size (L4 22GB→16, 24GB→32, V100→16) - trust auto-detection!
+   - **GPU utilization:** Preprocessing is I/O-bound, not compute-bound. 30-60% GPU is normal.
+   - **Models use 12-16GB:** Large pretrained models (SeamlessM4T, GPT) occupy most VRAM before batching
 
 6. **Generate Prompt Pairs**
    - Create prompt-target combinations
