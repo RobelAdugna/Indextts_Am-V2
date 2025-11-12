@@ -603,12 +603,18 @@ python webui_amharic.py --share  # Create public link
 **Pipeline Tabs:**
 1. Download - YouTube content collection
 2. Dataset - Audio segmentation with subtitles
-3. Corpus - Text aggregation and cleaning
+3. Corpus - Text aggregation and cleaning (supports direct file paths for remote environments)
 4. Tokenizer - BPE model training
 5. Preprocess - Feature extraction
 6. Training - GPT fine-tuning launcher
 7. Process Segments - Batch noise removal for existing datasets
 8. Inference - Links to existing TTS UIs
+
+**Remote Environment Support (Lightning AI, etc.):**
+- Tab 3 (Corpus Collection) supports direct file paths
+- No need to upload files from local PC
+- Just paste the full path: `/teamspace/studios/this_studio/amharic_dataset/manifest.jsonl`
+- Works with both file paths and directory paths
 
 ### Usage Pattern
 - Each tab auto-fills from previous step's output
