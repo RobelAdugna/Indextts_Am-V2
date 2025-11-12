@@ -573,31 +573,43 @@ def create_dataset(
 # ============================================================================
 
 def collect_corpus(
+    manifest_path: str,  # Direct path to manifest.jsonl (for remote environments like Lightning AI)
     input_files,
     output_file: str,
     min_length: int,
     show_stats: bool,
     progress=gr.Progress()
 ) -> Tuple[str, str, Dict]:
-    """Collect and clean Amharic corpus"""
+    """Collect and clean Amharic corpus from manifest or uploaded files"""
     
     if not output_file:
         output_file = "amharic_corpus.txt"
     
     output_path = Path(output_file)
     
-    # Prepare input files
+    # Prepare input files - prioritize direct path input
     input_paths = []
-    if input_files:
+    
+    # Option 1: Direct path input (for Lightning AI/remote)
+    if manifest_path and manifest_path.strip():
+        manifest_file = Path(manifest_path.strip()).expanduser()  # Handle ~/path
+        if manifest_file.exists():
+            input_paths = [str(manifest_file)]
+        else:
+            return "", format_status_html(f"❌ Error: File not found: {manifest_path}", False), pipeline_state
+    
+    # Option 2: Uploaded files
+    elif input_files:
         input_paths = [f.name for f in input_files]
+    
+    # Option 3: Auto-fill from dataset creation step
     elif pipeline_state.get("dataset_dir"):
-        # Use manifest from dataset creation
         manifest = Path(pipeline_state["dataset_dir"]) / "manifest.jsonl"
         if manifest.exists():
             input_paths = [str(manifest)]
     
     if not input_paths:
-        return "", format_status_html("❌ Error: No input files provided", False), pipeline_state
+        return "", format_status_html("❌ Error: No input files provided. Please enter manifest path or upload files.", False), pipeline_state
     
     progress(0.1, desc="Starting corpus collection...")
     
@@ -1312,14 +1324,27 @@ def create_ui():
         
         # Tab 3: Corpus Collection
         with gr.Tab("3️⃣ Corpus"):
-            gr.Markdown("### Collect and Clean Amharic Text Corpus")
+            gr.Markdown("""
+            ### Collect and Clean Amharic Text Corpus
+            
+            **💡 For Lightning AI/Remote:** Use direct path input below (no upload needed)!
+            
+            **Example:** `/teamspace/studios/this_studio/amharic_dataset/manifest.jsonl`
+            """)
             
             with gr.Row():
                 with gr.Column():
+                    corpus_manifest_path = gr.Textbox(
+                        label="📁 Manifest Path (Direct Path - Recommended for Remote)",
+                        placeholder="/teamspace/studios/this_studio/amharic_dataset/manifest.jsonl",
+                        info="Full path to manifest.jsonl file"
+                    )
+                    
                     corpus_input_files = gr.Files(
-                        label="Input Files (JSONL or text files)",
+                        label="Or Upload Files (JSONL or text files)",
                         file_types=[".jsonl", ".txt", ".json"]
                     )
+                    
                     corpus_output_file = gr.Textbox(
                         label="Output Corpus File",
                         value="amharic_corpus.txt"
@@ -1343,7 +1368,7 @@ def create_ui():
             
             collect_corpus_btn.click(
                 collect_corpus,
-                inputs=[corpus_input_files, corpus_output_file, min_length_corpus, show_stats],
+                inputs=[corpus_manifest_path, corpus_input_files, corpus_output_file, min_length_corpus, show_stats],
                 outputs=[corpus_logs, corpus_status, state]
             ).then(
                 update_pipeline_status,

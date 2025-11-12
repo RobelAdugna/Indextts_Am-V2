@@ -611,10 +611,12 @@ python webui_amharic.py --share  # Create public link
 8. Inference - Links to existing TTS UIs
 
 **Remote Environment Support (Lightning AI, etc.):**
-- Tab 3 (Corpus Collection) supports direct file paths
+- Tab 3 (Corpus Collection) supports direct file paths ✅
 - No need to upload files from local PC
 - Just paste the full path: `/teamspace/studios/this_studio/amharic_dataset/manifest.jsonl`
-- Works with both file paths and directory paths
+- Supports `~` expansion for home directory paths
+- Priority: Direct path → File upload → Auto-fill from pipeline
+- Amharic validation: Requires ≥50% Ethiopic characters (U+1200-137F ranges)
 
 ### Usage Pattern
 - Each tab auto-fills from previous step's output
