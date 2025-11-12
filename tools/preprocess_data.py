@@ -362,7 +362,7 @@ def process_batch(
         )
 
     if not candidates:
-        return [], skipped
+        return [], skipped, False
 
     if executor is not None:
         futures: Dict[Future, Dict[str, Any]] = {}
@@ -390,7 +390,7 @@ def process_batch(
             prepared.append(item)
 
     if not prepared:
-        return [], skipped
+        return [], skipped, False
 
     waveforms = [item["waveform"] for item in prepared]
     sample_rates = [item["sr"] for item in prepared]
