@@ -788,6 +788,18 @@ python tools/tokenizer/extend_bpe.py \
 
 A comprehensive Gradio web interface (`webui_amharic.py`) integrates all Amharic-specific tools into a single, user-friendly pipeline:
 
+### Troubleshooting Tab 4 (Tokenizer Extension)
+
+**Common Errors:**
+- **Empty manifest path:** Complete Tab 2 (Dataset Creation) first - the manifest auto-fills from there
+- **Base model not found:** Run `download_requirements.bat` (Windows) or `download_requirements.sh` (Linux/Mac) to download checkpoints
+- **extend_bpe.py not found:** Ensure `tools/tokenizer/extend_bpe.py` exists in your project
+- **Unclear error messages:** Check the "Extension Logs" tab - it now shows:
+  - Full command being run
+  - Complete stdout/stderr output
+  - Exit code
+  - Full Python traceback for exceptions
+
 **Features:**
 - 7 sequential tabs covering entire pipeline
 - Automatic state management and auto-fill

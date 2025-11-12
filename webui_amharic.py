@@ -714,11 +714,17 @@ def train_tokenizer(
         output_model = "tokenizers/amharic_extended_bpe.model"
     
     # Validate inputs
+    if not base_model_path or not base_model_path.strip():
+        return "", format_status_html("❌ Error: Base model path is empty. Please specify the base model path.", False), "", pipeline_state
+    
     if not Path(base_model_path).exists():
-        return "", format_status_html(f"❌ Error: Base model not found: {base_model_path}. Run download_requirements.bat first!", False), "", pipeline_state
+        return "", format_status_html(f"❌ Error: Base model not found: {base_model_path}\n\nPlease run download_requirements.bat first!", False), "", pipeline_state
+    
+    if not manifest_path or not manifest_path.strip():
+        return "", format_status_html("❌ Error: Manifest path is empty. Please complete Tab 2 (Dataset Creation) first, or manually specify the manifest path.", False), "", pipeline_state
     
     if not Path(manifest_path).exists():
-        return "", format_status_html(f"❌ Error: Manifest not found: {manifest_path}", False), "", pipeline_state
+        return "", format_status_html(f"❌ Error: Manifest not found: {manifest_path}\n\nPlease create a dataset in Tab 2 first.", False), "", pipeline_state
     
     progress(0.1, desc="Loading base tokenizer...")
     
@@ -743,6 +749,10 @@ def train_tokenizer(
     
     try:
         progress(0.3, desc="Extending tokenizer with Amharic tokens...")
+        
+        # Log the command being run
+        cmd_str = ' '.join(cmd)
+        print(f"Running command: {cmd_str}")  # Debug log
         
         result = subprocess.run(
             cmd,
@@ -791,13 +801,15 @@ def train_tokenizer(
                 log_text = result.stdout
                 test_result = ""
         else:
-            status_html = format_status_html("❌ Error extending tokenizer", False)
-            log_text = f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+            status_html = format_status_html(f"❌ Error extending tokenizer (exit code: {result.returncode})", False)
+            log_text = f"Command: {' '.join(cmd)}\n\nSTDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}\n\nExit code: {result.returncode}"
             test_result = ""
     
     except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
         status_html = format_status_html(f"❌ Error: {str(e)}", False)
-        log_text = str(e)
+        log_text = f"Exception occurred:\n{error_details}\n\nError: {str(e)}"
         test_result = ""
     
     return log_text, status_html, test_result, pipeline_state
