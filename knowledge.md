@@ -4,6 +4,22 @@
 
 IndexTTS2 is a state-of-the-art Text-to-Speech system supporting multiple languages including English, Chinese, Japanese, and now Amharic.
 
+**🎯 PRIMARY INTERFACE: Amharic WebUI (`webui_amharic.py`)**
+
+Always use the Amharic WebUI as your first option for any Amharic training tasks. It provides:
+- ✅ Complete 8-tab pipeline automation
+- ✅ Amharic-optimized defaults throughout
+- ✅ Real-time progress tracking
+- ✅ Error handling and validation
+- ✅ State management across tabs
+
+**Launch:** `python webui_amharic.py --share`
+
+**Only use CLI tools directly when:**
+- Debugging specific steps
+- Automation/scripting requirements
+- Remote environments without browser access
+
 ## Language Support
 
 ### Supported Languages
@@ -99,10 +115,15 @@ To add support for a new language, follow the pattern established for Amharic:
    - Clean and deduplicate
    - Validate language
 
-4. **Tokenizer Training**
-   - Train BPE on collected corpus
-   - Set high character coverage (0.9999)
-   - Include language-specific symbols
+4. **Tokenizer Extension** 🔤
+   - **CRITICAL:** Extend base tokenizer, DON'T train from scratch!
+   - Uses `tools/tokenizer/extend_bpe.py` (matches video at 20:05-30:00)
+   - Preserves base English/Chinese tokens (IDs 0-11999)
+   - Adds Amharic tokens (IDs 12000-23999)
+   - **Target size:** 24,000 (Amharic default)
+   - **Character coverage:** 0.9999 (high for Ethiopic script)
+   - **Input:** Base model + manifest.jsonl (NOT corpus.txt!)
+   - **WebUI:** Tab 4 with Amharic-optimized defaults
 
 5. **Preprocessing**
    - Extract semantic features (GPU-accelerated)
@@ -113,9 +134,13 @@ To add support for a new language, follow the pattern established for Amharic:
    - **GPU utilization:** Preprocessing is I/O-bound, not compute-bound. 30-60% GPU is normal.
    - **Models use 12-16GB:** Large pretrained models (SeamlessM4T, GPT) occupy most VRAM before batching
 
-6. **Generate Prompt Pairs**
-   - Create prompt-target combinations
-   - Required for GPT training
+6. **Generate Prompt Pairs** 🔗
+   - Create prompt-target combinations from same speaker
+   - **Critical:** Enables voice cloning and emotion transfer
+   - Pairs teach model to apply voice A to text B
+   - **Required for GPT training** - model will fail without this step!
+   - **Location:** Tab 5.5 in WebUI or `build_gpt_prompt_pairs.py`
+   - **Default:** 2 pairs per target utterance
 
 7. **GPT Training**
    - Fine-tune on new language
@@ -158,9 +183,9 @@ The training pipeline now **automatically detects** your hardware and optimizes 
 **Simple Command (Auto-Optimized):**
 ```bash
 python trainers/train_gpt_v2.py \
-  --train-manifest preprocessed/train_manifest.jsonl \
-  --val-manifest preprocessed/val_manifest.jsonl \
-  --tokenizer amharic_bpe.model
+  --train-manifest preprocessed/train_pairs.jsonl \
+  --val-manifest preprocessed/val_pairs.jsonl \
+  --tokenizer tokenizers/amharic_extended_bpe.model
   # All settings auto-detected! 🎉
 ```
 
@@ -721,9 +746,46 @@ python tools/create_amharic_dataset.py \
 - `training_v2` - current development
 - Feature branches for major changes
 
-## Amharic WebUI
+## BPE Tokenizer Extension (Video Workflow)
+
+**Source:** IndexTTS2 video at timestamp 20:05-30:00
+
+### Why Extension Not Training?
+
+**Extension Approach (CORRECT - from video):**
+```bash
+python tools/tokenizer/extend_bpe.py \
+  --base-model checkpoints/bpe.model \
+  --manifests dataset/manifest.jsonl \
+  --output-model tokenizers/amharic_extended_bpe.model \
+  --target-size 24000
+```
+
+**Benefits:**
+1. ✅ Preserves base token IDs → maintains cross-lingual transfer
+2. ✅ Base model already knows English/Chinese patterns
+3. ✅ Only adds new Amharic-specific tokens
+4. ✅ Smaller final model (no redundant tokens)
+5. ✅ Matches official IndexTTS2 multilingual approach
+
+**How It Works:**
+1. Loads base tokenizer (12k tokens: English/Chinese)
+2. Trains temporary tokenizer on Amharic manifest
+3. Extracts new Amharic-only tokens (not in base)
+4. Appends ~12k Amharic tokens to base
+5. Final vocab: 24k tokens (12k base + 12k Amharic)
+
+**Token ID Layout:**
+- IDs 0-11999: Base (English/Chinese) - **PRESERVED**
+- IDs 12000-23999: Amharic (new) - **ADDED**
+
+**DO NOT train from scratch** - you'll lose cross-lingual capability!
+
+## Amharic WebUI (PRIMARY INTERFACE)
 
 ### Overview
+**🎯 This is your #1 tool for all Amharic training!**
+
 A comprehensive Gradio web interface (`webui_amharic.py`) integrates all Amharic-specific tools into a single, user-friendly pipeline:
 
 **Features:**
@@ -745,8 +807,9 @@ python webui_amharic.py --share  # Create public link
 3. Corpus - Text aggregation and cleaning (supports direct file paths for remote environments)
 4. Tokenizer - BPE model training
 5. Preprocess - Feature extraction
-6. Training - GPT fine-tuning launcher
-7. Process Segments - Batch noise removal for existing datasets
+5.5. **Pairs - Generate prompt-target pairs (CRITICAL STEP!)** 🔗
+6. Training - GPT fine-tuning launcher (uses paired manifests)
+7. Post-Process - Batch noise removal for existing datasets
 8. Inference - Links to existing TTS UIs
 
 **Remote Environment Support (Lightning AI, etc.):**

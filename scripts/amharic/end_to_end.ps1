@@ -109,37 +109,38 @@ if (Test-Path $manifestFile) {
 }
 Write-Host ""
 
-# Step 4: Train/extend BPE tokenizer
-Write-Host "[Step 4/8] Training multilingual BPE tokenizer..." -ForegroundColor Yellow
-$corpusFile = Join-Path $DATA_DIR "amharic_corpus.txt"
-if (Test-Path $corpusFile) {
+# Step 4: Extend BPE tokenizer (following video workflow at 20:05-30:00)
+Write-Host "[Step 4/8] Extending base BPE tokenizer with Amharic..." -ForegroundColor Yellow
+$manifestFile = Join-Path $DATA_DIR "raw_dataset\manifest.jsonl"
+if (Test-Path $manifestFile) {
     $baseTokenizer = Join-Path $CHECKPOINTS_DIR "bpe.model"
-    if (Test-Path $baseTokenizer) {
-        Write-Host "  Extending existing tokenizer with Amharic data..."
-        uv run python tools/train_multilingual_bpe.py `
-            --corpus "$corpusFile" `
-            --model-prefix "$OUTPUT_DIR\amharic_bpe" `
-            --vocab-size 40000 `
-            --character-coverage 0.9999 `
-            --test-files "$corpusFile"
-    } else {
-        Write-Host "  Training new tokenizer..."
-        uv run python tools/train_multilingual_bpe.py `
-            --corpus "$corpusFile" `
-            --model-prefix "$OUTPUT_DIR\amharic_bpe" `
-            --vocab-size 32000 `
-            --character-coverage 0.9999 `
-            --test-files "$corpusFile"
+    if (-not (Test-Path $baseTokenizer)) {
+        Write-Host "  ✗ Base tokenizer not found: $baseTokenizer" -ForegroundColor Red
+        Write-Host "  Run download_requirements.bat first!" -ForegroundColor Yellow
+        exit 1
     }
+    
+    Write-Host "  ✓ Base tokenizer found (English/Chinese)" -ForegroundColor Green
+    Write-Host "  📊 Extending with Amharic tokens..."
+    
+    # Use extend_bpe.py (matches video exactly!)
+    uv run python tools/tokenizer/extend_bpe.py `
+        --base-model "$baseTokenizer" `
+        --manifests "$manifestFile" `
+        --output-model "$OUTPUT_DIR\amharic_extended_bpe.model" `
+        --target-size 24000 `
+        --character-coverage 0.9999
+    
+    Write-Host "  ✓ Extension complete: base vocab preserved + Amharic tokens added" -ForegroundColor Green
     Write-Host "✓ Step 4 complete" -ForegroundColor Green
 } else {
-    Write-Host "⚠ Skipping: No corpus file found" -ForegroundColor Yellow
+    Write-Host "⚠ Skipping: No manifest file found" -ForegroundColor Yellow
 }
 Write-Host ""
 
 # Step 5: Preprocess data
 Write-Host "[Step 5/8] Preprocessing Amharic dataset..." -ForegroundColor Yellow
-$tokenizerFile = Join-Path $OUTPUT_DIR "amharic_bpe.model"
+$tokenizerFile = Join-Path $OUTPUT_DIR "amharic_extended_bpe.model"
 if ((Test-Path $manifestFile) -and (Test-Path $tokenizerFile)) {
     uv run python tools/preprocess_data.py `
         --manifest "$manifestFile" `
@@ -216,6 +217,6 @@ Write-Host "Output directory: $OUTPUT_DIR"
 Write-Host "Trained checkpoints: $OUTPUT_DIR\trained_ckpts\"
 Write-Host ""
 Write-Host "To use the trained model, update your config to point to:"
-Write-Host "  Tokenizer: $OUTPUT_DIR\amharic_bpe.model"
+Write-Host "  Tokenizer: $OUTPUT_DIR\amharic_extended_bpe.model"
 Write-Host "  GPT: $OUTPUT_DIR\trained_ckpts\model_stepXXXX.pth"
 Write-Host ""

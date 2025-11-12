@@ -693,45 +693,56 @@ def collect_corpus(
 # ============================================================================
 
 def train_tokenizer(
-    corpus_files,
-    model_prefix: str,
-    vocab_size: int,
+    base_model_path: str,
+    manifest_path: str,
+    output_model: str,
+    target_size: int,
     character_coverage: float,
     test_text: str,
     progress=gr.Progress()
 ) -> Tuple[str, str, str, Dict]:
-    """Train multilingual BPE tokenizer"""
+    """Extend base BPE tokenizer with Amharic (following video workflow at 20:05-30:00)"""
     
-    if not model_prefix:
-        model_prefix = "amharic_bpe"
+    # Use pipeline state defaults
+    if not manifest_path and pipeline_state.get("dataset_dir"):
+        manifest_path = str(Path(pipeline_state["dataset_dir"]) / "manifest.jsonl")
     
-    # Prepare corpus files
-    corpus_paths = []
-    if corpus_files:
-        corpus_paths = [f.name for f in corpus_files]
-    elif pipeline_state.get("corpus_file"):
-        corpus_paths = [pipeline_state["corpus_file"]]
+    if not base_model_path:
+        base_model_path = "checkpoints/bpe.model"
     
-    if not corpus_paths:
-        return "", format_status_html("❌ Error: No corpus files provided", False), "", pipeline_state
+    if not output_model:
+        output_model = "tokenizers/amharic_extended_bpe.model"
     
-    progress(0.1, desc="Starting tokenizer training...")
+    # Validate inputs
+    if not Path(base_model_path).exists():
+        return "", format_status_html(f"❌ Error: Base model not found: {base_model_path}. Run download_requirements.bat first!", False), "", pipeline_state
     
-    # Build command
-    script_path = Path(current_dir) / "tools" / "train_multilingual_bpe.py"
+    if not Path(manifest_path).exists():
+        return "", format_status_html(f"❌ Error: Manifest not found: {manifest_path}", False), "", pipeline_state
+    
+    progress(0.1, desc="Loading base tokenizer...")
+    
+    # Prepare output directory
+    Path(output_model).parent.mkdir(parents=True, exist_ok=True)
+    
+    # Build command using extend_bpe.py (matches video!)
+    script_path = Path(current_dir) / "tools" / "tokenizer" / "extend_bpe.py"
+    
+    if not script_path.exists():
+        return "", format_status_html("❌ Error: extend_bpe.py not found", False), "", pipeline_state
     
     cmd = [
         sys.executable,
         str(script_path),
-        "--corpus",
-    ] + corpus_paths + [
-        "--model-prefix", model_prefix,
-        "--vocab-size", str(vocab_size),
+        "--base-model", base_model_path,
+        "--manifests", manifest_path,
+        "--output-model", output_model,
+        "--target-size", str(target_size),
         "--character-coverage", str(character_coverage),
     ]
     
     try:
-        progress(0.3, desc="Training tokenizer (this may take a while)...")
+        progress(0.3, desc="Extending tokenizer with Amharic tokens...")
         
         result = subprocess.run(
             cmd,
@@ -743,11 +754,23 @@ def train_tokenizer(
         progress(0.9, desc="Finalizing...")
         
         if result.returncode == 0:
-            model_path = Path(f"{model_prefix}.model")
+            model_path = Path(output_model)
             
             if model_path.exists():
+                # Update pipeline state
                 pipeline_state["tokenizer_model"] = str(model_path)
-                status_html = format_status_html(f"✅ Tokenizer trained: {model_path.name}")
+                
+                # Get actual vocab size
+                try:
+                    import sentencepiece as spm
+                    sp = spm.SentencePieceProcessor()
+                    sp.load(str(model_path))
+                    actual_vocab = sp.get_piece_size()
+                    status_html = format_status_html(
+                        f"✅ Tokenizer extended: {model_path.name} (vocab: {actual_vocab})"
+                    )
+                except:
+                    status_html = format_status_html(f"✅ Tokenizer extended: {model_path.name}")
                 
                 # Test tokenization
                 test_result = ""
@@ -757,7 +780,8 @@ def train_tokenizer(
                         sp = spm.SentencePieceProcessor()
                         sp.load(str(model_path))
                         tokens = sp.encode(test_text, out_type=str)
-                        test_result = f"Test tokenization:\nText: {test_text}\nTokens: {tokens}"
+                        token_ids = sp.encode(test_text)
+                        test_result = f"✅ Test tokenization:\nText: {test_text}\nTokens: {tokens}\nIDs: {token_ids[:20]}{'...' if len(token_ids) > 20 else ''}"
                     except Exception as e:
                         test_result = f"Test failed: {str(e)}"
                 
@@ -767,7 +791,7 @@ def train_tokenizer(
                 log_text = result.stdout
                 test_result = ""
         else:
-            status_html = format_status_html("❌ Error training tokenizer", False)
+            status_html = format_status_html("❌ Error extending tokenizer", False)
             log_text = f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
             test_result = ""
     
@@ -897,6 +921,136 @@ def preprocess_data(
 
 
 # ============================================================================
+# Tab 5.5: Generate GPT Pairs
+# ============================================================================
+
+def generate_gpt_pairs(
+    train_manifest: str,
+    val_manifest: str,
+    train_output: str,
+    val_output: str,
+    pairs_per_target: int,
+    min_text_len: int,
+    progress=gr.Progress()
+) -> Tuple[str, str, Dict]:
+    """Generate GPT prompt-target pairs from preprocessed manifests"""
+    
+    # Use pipeline state defaults
+    if not train_manifest and pipeline_state.get("processed_dir"):
+        train_manifest = str(Path(pipeline_state["processed_dir"]) / "train_manifest.jsonl")
+        val_manifest = str(Path(pipeline_state["processed_dir"]) / "val_manifest.jsonl")
+    
+    if not train_output:
+        train_output = "processed_data/train_pairs.jsonl"
+    
+    if not val_output:
+        val_output = "processed_data/val_pairs.jsonl"
+    
+    # Validate inputs
+    if not Path(train_manifest).exists():
+        return "", format_status_html(f"❌ Error: Train manifest not found: {train_manifest}", False), pipeline_state
+    
+    if not Path(val_manifest).exists():
+        return "", format_status_html(f"❌ Error: Validation manifest not found: {val_manifest}", False), pipeline_state
+    
+    progress(0.1, desc="Starting pair generation...")
+    
+    # Build command for training pairs
+    script_path = Path(current_dir) / "tools" / "build_gpt_prompt_pairs.py"
+    
+    if not script_path.exists():
+        return "", format_status_html(f"❌ Error: build_gpt_prompt_pairs.py not found", False), pipeline_state
+    
+    logs = []
+    
+    try:
+        # Generate training pairs
+        progress(0.3, desc="Generating training pairs...")
+        
+        cmd_train = [
+            sys.executable,
+            str(script_path),
+            "--manifest", train_manifest,
+            "--output", train_output,
+            "--pairs-per-target", str(pairs_per_target),
+            "--min-text-len", str(min_text_len),
+        ]
+        
+        result_train = subprocess.run(
+            cmd_train,
+            capture_output=True,
+            text=True,
+            timeout=600
+        )
+        
+        if result_train.returncode != 0:
+            return (
+                f"TRAIN:\n{result_train.stdout}\n\nERROR:\n{result_train.stderr}",
+                format_status_html("❌ Error generating training pairs", False),
+                pipeline_state
+            )
+        
+        logs.append(f"✅ Training pairs: {result_train.stdout.strip()}")
+        
+        # Generate validation pairs
+        progress(0.6, desc="Generating validation pairs...")
+        
+        cmd_val = [
+            sys.executable,
+            str(script_path),
+            "--manifest", val_manifest,
+            "--output", val_output,
+            "--pairs-per-target", str(pairs_per_target),
+            "--min-text-len", str(min_text_len),
+        ]
+        
+        result_val = subprocess.run(
+            cmd_val,
+            capture_output=True,
+            text=True,
+            timeout=600
+        )
+        
+        if result_val.returncode != 0:
+            return (
+                f"TRAIN:\n{result_train.stdout}\n\nVAL ERROR:\n{result_val.stderr}",
+                format_status_html("❌ Error generating validation pairs", False),
+                pipeline_state
+            )
+        
+        logs.append(f"✅ Validation pairs: {result_val.stdout.strip()}")
+        
+        progress(0.9, desc="Finalizing...")
+        
+        # Update pipeline state with pair paths
+        pipeline_state["train_pairs"] = train_output
+        pipeline_state["val_pairs"] = val_output
+        
+        # Count pairs
+        train_count = 0
+        val_count = 0
+        
+        if Path(train_output).exists():
+            with open(train_output, 'r', encoding='utf-8') as f:
+                train_count = sum(1 for _ in f)
+        
+        if Path(val_output).exists():
+            with open(val_output, 'r', encoding='utf-8') as f:
+                val_count = sum(1 for _ in f)
+        
+        status_html = format_status_html(
+            f"✅ Pairs generated: {train_count} train pairs, {val_count} val pairs"
+        )
+        
+        log_text = "\n".join(logs)
+        
+        return log_text, status_html, pipeline_state
+    
+    except Exception as e:
+        return str(e), format_status_html(f"❌ Error: {str(e)}", False), pipeline_state
+
+
+# ============================================================================
 # Tab 6: Training
 # ============================================================================
 
@@ -1015,11 +1169,13 @@ def create_ui():
             
             1. **Download** - Collect Amharic content from YouTube
             2. **Dataset** - Segment audio using subtitles
-            3. **Corpus** - Clean and aggregate text
-            4. **Tokenizer** - Train BPE model
+            3. **Corpus** - Clean and aggregate text (optional for extension)
+            4. **Tokenizer** - EXTEND base BPE with Amharic tokens (video approach ✅)
             5. **Preprocess** - Extract features
+            5.5. **Pairs** - Generate prompt-target pairs (CRITICAL!)
             6. **Train** - Fine-tune GPT model
-            7. **Inference** - Generate speech
+            7. **Post-Process** - Remove noise from segments
+            8. **Inference** - Generate speech
             
             ### Quick Start
             1. Prepare a text file with YouTube URLs (one per line)
@@ -1051,6 +1207,8 @@ def create_ui():
                     status_lines.append(f"✅ **Tokenizer:** `{state['tokenizer_model']}`")
                 if state.get("processed_dir"):
                     status_lines.append(f"✅ **Processed:** `{state['processed_dir']}`")
+                if state.get("train_pairs") and state.get("val_pairs"):
+                    status_lines.append(f"✅ **Pairs:** `{state['train_pairs']}`")
                 
                 return "\n".join(status_lines) if status_lines else "No steps completed yet"
         
@@ -1358,6 +1516,10 @@ def create_ui():
             gr.Markdown("""
             ### Collect and Clean Amharic Text Corpus
             
+            **⚠️ NOTE:** When using BPE extension (Tab 4), corpus collection is OPTIONAL.
+            - Extension reads text directly from manifest.jsonl (Tab 2)
+            - This tab is for backwards compatibility or additional corpus sources
+            
             **💡 For Lightning AI/Remote:** Use direct path input below (no upload needed)!
             
             **Example:** `/teamspace/studios/this_studio/amharic_dataset/manifest.jsonl`
@@ -1444,7 +1606,14 @@ def create_ui():
                         value="ሰላም ልዑል! እንዴት ነዎት?"
                     )
                     
-                    train_tokenizer_btn = gr.Button("🔤 Train Tokenizer", variant="primary", size="lg")
+                    gr.Markdown("""
+                    **📊 Recommended Settings (Amharic):**
+                    - Target Size: 24,000 (base 12k + Amharic 12k)
+                    - Character Coverage: 0.9999 (captures all Ethiopic chars)
+                    - Uses: `tools/tokenizer/extend_bpe.py` (video approach ✅)
+                    """)
+                    
+                    train_tokenizer_btn = gr.Button("🔤 Extend Tokenizer", variant="primary", size="lg")
                 
                 with gr.Column():
                     tokenizer_status = gr.HTML("Ready to train tokenizer")
@@ -1525,23 +1694,118 @@ def create_ui():
                 outputs=[pipeline_status]
             )
         
+        # Tab 5.5: Generate GPT Prompt Pairs
+        with gr.Tab("5.5️⃣ Pairs"):
+            gr.Markdown("### Generate GPT Prompt-Target Pairs")
+            gr.Markdown("""
+            **Critical Step:** Creates prompt-target pairs needed for GPT training.
+            
+            **Why needed?**
+            - Enables voice cloning and emotion transfer
+            - Pairs teach model to apply voice A to text B
+            - Each target gets multiple prompts from same speaker
+            
+            **What it does:**
+            - Takes single-sample manifest from preprocessing
+            - Creates pairs: prompt (voice/emotion) + target (text/codes)
+            - Same speaker requirement ensures voice consistency
+            """)
+            
+            with gr.Row():
+                with gr.Column():
+                    pairs_train_manifest = gr.Textbox(
+                        label="Train Manifest (from preprocessing)",
+                        placeholder="Will auto-fill from preprocessing step"
+                    )
+                    pairs_val_manifest = gr.Textbox(
+                        label="Validation Manifest (from preprocessing)",
+                        placeholder="Will auto-fill from preprocessing step"
+                    )
+                    
+                    pairs_train_output = gr.Textbox(
+                        label="Output Train Pairs",
+                        value="processed_data/train_pairs.jsonl"
+                    )
+                    pairs_val_output = gr.Textbox(
+                        label="Output Validation Pairs",
+                        value="processed_data/val_pairs.jsonl"
+                    )
+                    
+                    with gr.Row():
+                        pairs_per_target = gr.Slider(
+                            label="Pairs per Target",
+                            minimum=1,
+                            maximum=5,
+                            value=2,
+                            step=1,
+                            info="How many different prompts to pair with each target"
+                        )
+                        pairs_min_text_len = gr.Slider(
+                            label="Min Text Length",
+                            minimum=1,
+                            maximum=50,
+                            value=5,
+                            step=1,
+                            info="Skip targets shorter than this"
+                        )
+                    
+                    gr.Markdown("""
+                    **💡 Tip:** More pairs per target = more training data but longer training time.
+                    Default of 2 pairs is recommended for most cases.
+                    """)
+                    
+                    generate_pairs_btn = gr.Button("🔗 Generate Pairs", variant="primary", size="lg")
+                
+                with gr.Column():
+                    pairs_status = gr.HTML("Ready to generate pairs")
+                    pairs_logs = gr.Textbox(label="Logs", lines=15, max_lines=20)
+            
+            # Auto-fill from preprocessing
+            state.change(
+                lambda s: (
+                    str(Path(s.get("processed_dir", "processed_data")) / "train_manifest.jsonl") if s.get("processed_dir") else "",
+                    str(Path(s.get("processed_dir", "processed_data")) / "val_manifest.jsonl") if s.get("processed_dir") else ""
+                ),
+                inputs=[state],
+                outputs=[pairs_train_manifest, pairs_val_manifest]
+            )
+            
+            generate_pairs_btn.click(
+                generate_gpt_pairs,
+                inputs=[
+                    pairs_train_manifest,
+                    pairs_val_manifest,
+                    pairs_train_output,
+                    pairs_val_output,
+                    pairs_per_target,
+                    pairs_min_text_len
+                ],
+                outputs=[pairs_logs, pairs_status, state]
+            ).then(
+                update_pipeline_status,
+                inputs=[state],
+                outputs=[pipeline_status]
+            )
+        
         # Tab 6: Training
         with gr.Tab("6️⃣ Training"):
             gr.Markdown("### Fine-tune GPT Model")
             gr.Markdown("""
             **Note:** Training is a long-running process. This will start training in the background.
             Monitor progress using TensorBoard or check the terminal output.
+            
+            **Important:** Use the PAIRED manifests from Tab 5.5, not the single-sample manifests!
             """)
             
             with gr.Row():
                 with gr.Column():
                     train_manifest_path = gr.Textbox(
-                        label="Train Manifest",
-                        placeholder="Will auto-fill from preprocessing step"
+                        label="Train Pairs Manifest",
+                        placeholder="Will auto-fill from pairing step (use train_pairs.jsonl!)"
                     )
                     val_manifest_path = gr.Textbox(
-                        label="Validation Manifest",
-                        placeholder="Will auto-fill from preprocessing step"
+                        label="Validation Pairs Manifest",
+                        placeholder="Will auto-fill from pairing step (use val_pairs.jsonl!)"
                     )
                     train_output_dir = gr.Textbox(
                         label="Output Directory",
@@ -1569,6 +1833,16 @@ def create_ui():
                     training_status = gr.HTML("Ready to start training")
                     training_info = gr.Textbox(label="Training Info", lines=10)
             
+            # Auto-fill from pairs
+            state.change(
+                lambda s: (
+                    s.get("train_pairs", ""),
+                    s.get("val_pairs", "")
+                ),
+                inputs=[state],
+                outputs=[train_manifest_path, val_manifest_path]
+            )
+            
             start_training_btn.click(
                 start_training,
                 inputs=[
@@ -1579,7 +1853,7 @@ def create_ui():
             )
         
         # Tab 7: Dataset Segment Processing
-        with gr.Tab("7️⃣ Process Segments"):
+        with gr.Tab("7️⃣ Post-Process"):
             gr.Markdown("### Remove Noise from Existing Dataset Segments")
             gr.Markdown("""
             **Post-processing for existing datasets:** Remove background music/noise from already-created 

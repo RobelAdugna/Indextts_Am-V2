@@ -106,41 +106,41 @@ else
 fi
 echo ""
 
-# Step 4: Train/extend BPE tokenizer
-echo "[Step 4/8] Training multilingual BPE tokenizer..."
-if [ -f "${DATA_DIR}/amharic_corpus.txt" ]; then
+# Step 4: Extend BPE tokenizer (following video workflow at 20:05-30:00)
+echo "[Step 4/8] Extending base BPE tokenizer with Amharic..."
+if [ -f "${DATA_DIR}/raw_dataset/manifest.jsonl" ]; then
     # Check if base tokenizer exists
-    if [ -f "${CHECKPOINTS_DIR}/bpe.model" ]; then
-        echo "  Extending existing tokenizer with Amharic data..."
-        # Train new tokenizer with combined corpus
-        uv run python tools/train_multilingual_bpe.py \
-            --corpus "${DATA_DIR}/amharic_corpus.txt" \
-            --model-prefix "${OUTPUT_DIR}/amharic_bpe" \
-            --vocab-size 40000 \
-            --character-coverage 0.9999 \
-            --test-files "${DATA_DIR}/amharic_corpus.txt"
-    else
-        echo "  Training new tokenizer..."
-        uv run python tools/train_multilingual_bpe.py \
-            --corpus "${DATA_DIR}/amharic_corpus.txt" \
-            --model-prefix "${OUTPUT_DIR}/amharic_bpe" \
-            --vocab-size 32000 \
-            --character-coverage 0.9999 \
-            --test-files "${DATA_DIR}/amharic_corpus.txt"
+    if [ ! -f "${CHECKPOINTS_DIR}/bpe.model" ]; then
+        echo "  ✗ Base tokenizer not found: ${CHECKPOINTS_DIR}/bpe.model"
+        echo "  Run download_requirements.sh first!"
+        exit 1
     fi
+    
+    echo "  ✓ Base tokenizer found (English/Chinese)"
+    echo "  📊 Extending with Amharic tokens..."
+    
+    # Use extend_bpe.py (matches video exactly!)
+    uv run python tools/tokenizer/extend_bpe.py \
+        --base-model "${CHECKPOINTS_DIR}/bpe.model" \
+        --manifests "${DATA_DIR}/raw_dataset/manifest.jsonl" \
+        --output-model "${OUTPUT_DIR}/amharic_extended_bpe.model" \
+        --target-size 24000 \
+        --character-coverage 0.9999
+    
+    echo "  ✓ Extension complete: base vocab preserved + Amharic tokens added"
     echo "✓ Step 4 complete"
 else
-    echo "⚠ Skipping: No corpus file found"
+    echo "⚠ Skipping: No manifest file found"
 fi
 echo ""
 
 # Step 5: Preprocess data
 echo "[Step 5/8] Preprocessing Amharic dataset..."
-if [ -f "${DATA_DIR}/raw_dataset/manifest.jsonl" ] && [ -f "${OUTPUT_DIR}/amharic_bpe.model" ]; then
+if [ -f "${DATA_DIR}/raw_dataset/manifest.jsonl" ] && [ -f "${OUTPUT_DIR}/amharic_extended_bpe.model" ]; then
     uv run python tools/preprocess_data.py \
         --manifest "${DATA_DIR}/raw_dataset/manifest.jsonl" \
         --output-dir "${DATA_DIR}/processed" \
-        --tokenizer "${OUTPUT_DIR}/amharic_bpe.model" \
+        --tokenizer "${OUTPUT_DIR}/amharic_extended_bpe.model" \
         --language am \
         --val-ratio 0.01 \
         --batch-size 4
