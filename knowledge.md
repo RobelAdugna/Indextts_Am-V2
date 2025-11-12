@@ -105,10 +105,12 @@ To add support for a new language, follow the pattern established for Amharic:
    - Include language-specific symbols
 
 5. **Preprocessing**
-   - Extract semantic features
+   - Extract semantic features (GPU-accelerated)
    - Tokenize text
-   - Generate conditioning vectors
+   - Generate conditioning vectors (GPU-accelerated)
    - Split train/validation
+   - **Performance:** Auto-detects optimal batch size (L4 24GB→32, V100 16GB→16) for 80-95% GPU utilization
+   - **Important:** Preprocessing is I/O + GPU hybrid - batch size determines GPU saturation
 
 6. **Generate Prompt Pairs**
    - Create prompt-target combinations

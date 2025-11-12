@@ -177,14 +177,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=1,
-        help="Number of samples to process concurrently. Increase for higher throughput if VRAM allows.",
+        default=0,
+        help="Number of samples to process concurrently (0=auto-detect based on GPU VRAM: 24GB→32, 16GB→16, 8GB→8, CPU→1).",
     )
     parser.add_argument(
         "--workers",
         type=int,
         default=0,
-        help="Number of background worker threads for audio loading/resampling. 0 disables threading.",
+        help="Number of background worker threads for audio loading/resampling (0=auto-detect based on CPU cores).",
     )
     return parser.parse_args()
 
@@ -615,6 +615,33 @@ def main() -> None:
     random.seed(args.seed)
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
+    
+    # Auto-detect optimal batch size and workers
+    if args.batch_size == 0:
+        if torch.cuda.is_available():
+            # GPU batch sizing based on VRAM
+            vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            if vram_gb >= 24:  # L4, RTX 3090/4090, A10
+                args.batch_size = 32
+            elif vram_gb >= 16:  # V100, RTX 4080
+                args.batch_size = 16
+            elif vram_gb >= 12:  # T4, RTX 3060
+                args.batch_size = 12
+            elif vram_gb >= 8:  # RTX 3050
+                args.batch_size = 8
+            else:
+                args.batch_size = 4
+            print(f"[Auto-Optimization] GPU detected: {torch.cuda.get_device_name(0)} ({vram_gb:.1f}GB)")
+            print(f"[Auto-Optimization] Using batch_size={args.batch_size} for preprocessing")
+        else:
+            args.batch_size = 1
+            print("[Auto-Optimization] CPU mode: batch_size=1")
+    
+    if args.workers == 0:
+        optimal_workers = get_optimal_preprocessing_workers()
+        args.workers = optimal_workers
+        print(f"[Auto-Optimization] Using {args.workers} worker threads for audio I/O")
+    
     batch_size = max(1, args.batch_size)
 
     output_root = args.output_root.expanduser().resolve() if args.output_root else None
