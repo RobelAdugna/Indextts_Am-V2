@@ -8,16 +8,36 @@ User reported "unclear error message" when clicking "Extend Tokenizer" button in
 
 ## Root Cause Analysis
 
-### Primary Issue: NumPy 2.x Incompatibility
+### PRIMARY ISSUE: Gradio UI Component Mismatch ✅ FIXED
 
-The terminal logs show:
+**Error:**
+```python
+AttributeError: 'list' object has no attribute 'strip'
 ```
-ImportError: A module that was compiled using NumPy 1.x cannot be run in NumPy 2.3.4
-```
 
-This crashes the **entire WebUI** on startup before you can even reach Tab 4!
+**Cause:**
+The Gradio UI components didn't match the `train_tokenizer()` function signature!
 
-### Secondary Issue: Vague Error Messages
+**Old UI (WRONG):**
+- `tokenizer_corpus_files` (gr.Files) → Returns a **LIST**!
+- `tokenizer_model_prefix` (Textbox)
+- `vocab_size` (Slider)
+- 5 total inputs
+
+**Function Expected:**
+- `base_model_path` (string)
+- `manifest_path` (string)  
+- `output_model` (string)
+- `target_size` (int)
+- `character_coverage` (float)
+- `test_text` (string)
+- 6 total parameters
+
+When Gradio passed a list to `base_model_path.strip()`, Python threw `AttributeError`!
+
+### Secondary Issue: NumPy 2.x (Already documented)
+
+### Tertiary Issue: Vague Error Messages
 
 The original `train_tokenizer()` function had minimal error reporting:
 - Generic "Error: {str(e)}" messages
@@ -27,7 +47,51 @@ The original `train_tokenizer()` function had minimal error reporting:
 
 ## Solution Applied
 
-### ✅ Enhanced Error Handling (webui_amharic.py)
+### ✅ Fixed UI Components (webui_amharic.py)
+
+**New UI (CORRECT):**
+```python
+base_model_input = gr.Textbox(
+    label="Base Model Path",
+    value="checkpoints/bpe.model"
+)
+manifest_input_tokenizer = gr.Textbox(
+    label="Manifest Path (from Tab 2)",
+    placeholder="Auto-fills from Tab 2"
+)
+output_model_input = gr.Textbox(
+    label="Output Model Path",
+    value="tokenizers/amharic_extended_bpe.model"
+)
+target_size = gr.Slider(
+    label="Target Vocabulary Size",
+    minimum=12000,
+    maximum=48000,
+    value=24000,  # Amharic default!
+    info="Total vocab size (base 12k + new tokens)"
+)
+```
+
+**Auto-fill from Tab 2:**
+```python
+state.change(
+    lambda s: str(Path(s.get("dataset_dir", "")) / "manifest.jsonl") if s.get("dataset_dir") else "",
+    inputs=[state],
+    outputs=[manifest_input_tokenizer]
+)
+```
+
+**Button Click Fixed:**
+```python
+train_tokenizer_btn.click(
+    train_tokenizer,
+    inputs=[base_model_input, manifest_input_tokenizer, output_model_input, 
+            target_size, character_coverage, test_text_tokenizer],  # 6 inputs ✅
+    outputs=[tokenizer_logs, tokenizer_status, tokenizer_test_result, state]
+)
+```
+
+### ✅ Enhanced Error Handling (Already Applied)
 
 **Changes made:**
 
@@ -220,14 +284,17 @@ python tools/tokenizer/extend_bpe.py \
 
 ## Summary
 
-✅ **Error handling improvements applied**
+✅ **UI components fixed** (base_model, manifest, output_model, target_size)
+✅ **Auto-fill from Tab 2** (manifest path)
+✅ **Error handling improvements applied** (traceback, command logging, exit codes)
 ✅ **Documentation updated**  
 ✅ **Syntax validated**
+✅ **Amharic-optimized defaults** (24k vocab, 0.9995 coverage)
 
 **User action required:**
-1. Fix NumPy: `pip install 'numpy<2'`
-2. Restart WebUI
-3. Try Tab 4 - now shows detailed errors!
+1. Restart WebUI (to load the fixed code)
+2. Try Tab 4 - should work now!
+3. (Optional) Fix NumPy if needed: `pip install 'numpy<2'`
 
 ---
 

@@ -1583,30 +1583,37 @@ def create_ui():
         
         # Tab 4: Tokenizer Training
         with gr.Tab("4️⃣ Tokenizer"):
-            gr.Markdown("### Train Multilingual BPE Tokenizer")
+            gr.Markdown("### Extend BPE Tokenizer with Amharic")
             
             with gr.Row():
                 with gr.Column():
-                    tokenizer_corpus_files = gr.Files(
-                        label="Corpus Files",
-                        file_types=[".txt"]
+                    base_model_input = gr.Textbox(
+                        label="Base Model Path",
+                        value="checkpoints/bpe.model",
+                        placeholder="checkpoints/bpe.model"
                     )
-                    tokenizer_model_prefix = gr.Textbox(
-                        label="Model Prefix",
-                        value="amharic_bpe"
+                    manifest_input_tokenizer = gr.Textbox(
+                        label="Manifest Path (from Tab 2)",
+                        placeholder="Auto-fills from Tab 2"
+                    )
+                    output_model_input = gr.Textbox(
+                        label="Output Model Path",
+                        value="tokenizers/amharic_extended_bpe.model",
+                        placeholder="tokenizers/amharic_extended_bpe.model"
                     )
                     
                     with gr.Row():
-                        vocab_size = gr.Slider(
-                            label="Vocabulary Size",
-                            minimum=1000,
-                            maximum=64000,
-                            value=32000,
-                            step=1000
+                        target_size = gr.Slider(
+                            label="Target Vocabulary Size",
+                            minimum=12000,
+                            maximum=48000,
+                            value=24000,
+                            step=1000,
+                            info="Total vocab size (base 12k + new tokens)"
                         )
                         character_coverage = gr.Slider(
                             label="Character Coverage",
-                            minimum=0.9,
+                            minimum=0.99,
                             maximum=1.0,
                             value=0.9995,
                             step=0.0001
@@ -1632,9 +1639,16 @@ def create_ui():
                     tokenizer_logs = gr.Textbox(label="Logs", lines=10, max_lines=15)
                     tokenizer_test_result = gr.Textbox(label="Test Result", lines=5)
             
+            # Auto-fill manifest path from Tab 2
+            state.change(
+                lambda s: str(Path(s.get("dataset_dir", "")) / "manifest.jsonl") if s.get("dataset_dir") else "",
+                inputs=[state],
+                outputs=[manifest_input_tokenizer]
+            )
+            
             train_tokenizer_btn.click(
                 train_tokenizer,
-                inputs=[tokenizer_corpus_files, tokenizer_model_prefix, vocab_size, character_coverage, test_text_tokenizer],
+                inputs=[base_model_input, manifest_input_tokenizer, output_model_input, target_size, character_coverage, test_text_tokenizer],
                 outputs=[tokenizer_logs, tokenizer_status, tokenizer_test_result, state]
             ).then(
                 update_pipeline_status,
