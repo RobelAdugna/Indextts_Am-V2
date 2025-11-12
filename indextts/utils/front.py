@@ -72,6 +72,7 @@ class TextNormalizer:
             "፦": ":",
             "፧": "?",
             "፨": "!",
+            "፡": " ",  # Amharic word separator (U+1361)
             **self.char_rep_map,
         }
         self._base_cleanup_pattern = re.compile("|".join(re.escape(p) for p in self.char_rep_map.keys()))

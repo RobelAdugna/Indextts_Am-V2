@@ -41,6 +41,7 @@ from omegaconf import OmegaConf
 
 from indextts.gpt.model_v2 import UnifiedVoice
 from indextts.utils.front import TextNormalizer, TextTokenizer
+from indextts.utils.hardware_optimizer import detect_hardware, print_hardware_summary
 
 
 def parse_args() -> argparse.Namespace:
@@ -65,8 +66,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=Path, default=Path("checkpoints/config.yaml"), help="Model config YAML.")
     parser.add_argument("--base-checkpoint", type=Path, default=Path("checkpoints/gpt.pth"), help="Base GPT checkpoint.")
     parser.add_argument("--output-dir", type=Path, default=Path("trained_ckpts"), help="Directory for checkpoints/logs.")
-    parser.add_argument("--batch-size", type=int, default=4, help="Mini-batch size per optimisation step.")
-    parser.add_argument("--grad-accumulation", type=int, default=1, help="Gradient accumulation steps.")
+    parser.add_argument("--batch-size", type=int, default=0, help="Mini-batch size (0=auto-detect based on GPU VRAM).")
+    parser.add_argument("--grad-accumulation", type=int, default=0, help="Gradient accumulation steps (0=auto-detect to reach effective batch=32).")
     parser.add_argument("--epochs", type=int, default=10, help="Number of epochs.")
     parser.add_argument("--learning-rate", type=float, default=2e-5, help="Initial learning rate.")
     parser.add_argument("--weight-decay", type=float, default=0.01, help="Weight decay.")
@@ -74,11 +75,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, default=0, help="Optional max optimiser steps (0 = unlimited).")
     parser.add_argument("--log-interval", type=int, default=100, help="Steps between training log entries.")
     parser.add_argument("--val-interval", type=int, default=0, help="Validation frequency in steps (0 = once per epoch).")
-    parser.add_argument("--num-workers", type=int, default=0, help="DataLoader workers.")
+    parser.add_argument("--num-workers", type=int, default=0, help="DataLoader workers (0=auto-detect based on CPU count).")
     parser.add_argument("--grad-clip", type=float, default=1.0, help="Gradient norm clipping value.")
     parser.add_argument("--text-loss-weight", type=float, default=0.2, help="Weight for text CE loss.")
     parser.add_argument("--mel-loss-weight", type=float, default=0.8, help="Weight for semantic CE loss.")
-    parser.add_argument("--amp", action="store_true", help="Enable CUDA AMP.")
+    parser.add_argument("--amp", action="store_true", help="Enable CUDA AMP (bfloat16 on L4).")
+    parser.add_argument("--grad-checkpointing", action="store_true", help="Enable gradient checkpointing to save VRAM (slower but allows larger batches).")
     parser.add_argument("--resume", type=str, default="", help="Path to checkpoint to resume from, or 'auto'.")
     parser.add_argument("--seed", type=int, default=1234, help="Random seed.")
     return parser.parse_args()
@@ -450,7 +452,19 @@ def build_model(cfg_path: Path, tokenizer: TextTokenizer, base_checkpoint: Path,
     if unexpected:
         print(f"[Warn] Unexpected keys during load: {unexpected}")
 
-    return model.to(device)
+    model = model.to(device)
+    
+    # L4 optimization: Use channels_last memory format for conv layers (if any)
+    # Note: This primarily benefits CNNs; transformers may not see significant speedup
+    # This can provide 20-30% speedup on Tensor Cores for conv-heavy models
+    try:
+        model = model.to(memory_format=torch.channels_last)
+        print("[L4 Optimizations] Model converted to channels_last memory format")
+    except Exception:
+        # Not all models support channels_last, fall back gracefully
+        pass
+    
+    return model
 
 
 def compute_losses(
@@ -570,7 +584,46 @@ def evaluate(model: UnifiedVoice, loader: DataLoader, device: torch.device) -> D
 def main() -> None:
     args = parse_args()
     set_seed(args.seed)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    # Auto-detect hardware and get optimal settings
+    hw_config = detect_hardware()
+    print_hardware_summary(hw_config)
+    
+    device = torch.device("cuda" if hw_config.has_cuda else "cpu")
+    
+    # Apply hardware-specific optimizations
+    if hw_config.has_cuda:
+        if hw_config.use_tf32:
+            # Enable TF32 for matmul (3-8× speedup on Ampere/Ada/Hopper GPUs)
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+        
+        # Enable cuDNN autotuner for optimal performance
+        torch.backends.cudnn.benchmark = True
+        
+        # Disable cuDNN deterministic for speed (comment out if reproducibility needed)
+        torch.backends.cudnn.deterministic = False
+    
+    # Override with auto-detected values if not specified by user
+    if args.batch_size == 0:
+        args.batch_size = hw_config.batch_size
+        print(f"[Auto-Optimization] Using batch_size={args.batch_size} (auto-detected)")
+    
+    if args.grad_accumulation == 0:
+        args.grad_accumulation = hw_config.grad_accumulation
+        print(f"[Auto-Optimization] Using grad_accumulation={args.grad_accumulation} (auto-detected)")
+    
+    if args.num_workers == 0:
+        args.num_workers = hw_config.num_workers
+        print(f"[Auto-Optimization] Using num_workers={args.num_workers} (auto-detected)")
+    
+    # Auto-enable AMP if not explicitly set and GPU supports it
+    if not args.amp and hw_config.use_amp:
+        print(f"[Auto-Optimization] Enabling --amp (recommended for GPU training)")
+        args.amp = True
+    
+    effective_batch = args.batch_size * args.grad_accumulation
+    print(f"[Training Config] Effective batch size: {effective_batch}")
 
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -586,6 +639,15 @@ def main() -> None:
 
     tokenizer = load_tokenizer(args.tokenizer)
     model = build_model(args.config, tokenizer, args.base_checkpoint, device)
+    
+    # Enable gradient checkpointing if requested (saves VRAM)
+    if args.grad_checkpointing and hasattr(model, 'gpt'):
+        try:
+            if hasattr(model.gpt, 'gradient_checkpointing_enable'):
+                model.gpt.gradient_checkpointing_enable()
+                print("[L4 Optimizations] Gradient checkpointing enabled")
+        except Exception as e:
+            print(f"[Warn] Could not enable gradient checkpointing: {e}")
 
     train_specs = parse_manifest_specs(args.train_manifests, "--train-manifest")
     val_specs = parse_manifest_specs(args.val_manifests, "--val-manifest")
@@ -645,7 +707,17 @@ def main() -> None:
         num_training_steps=total_steps,
     )
     use_amp = args.amp and device.type == "cuda"
-    scaler = torch.cuda.amp.GradScaler() if use_amp else None
+    
+    # Use detected AMP dtype from hardware config
+    if hw_config.amp_dtype == "bfloat16":
+        amp_dtype = torch.bfloat16
+        scaler = None if use_amp else None  # bfloat16 doesn't need gradient scaling
+    elif hw_config.amp_dtype == "float16":
+        amp_dtype = torch.float16
+        scaler = torch.cuda.amp.GradScaler() if use_amp else None
+    else:
+        amp_dtype = torch.float32
+        scaler = None
 
     global_step = 0
     start_epoch = 0
@@ -687,23 +759,27 @@ def main() -> None:
 
     for epoch in range(start_epoch, args.epochs):
         for batch_idx, batch in enumerate(train_loader):
-            with torch.cuda.amp.autocast(enabled=use_amp):
+            with torch.cuda.amp.autocast(enabled=use_amp, dtype=amp_dtype if use_amp else torch.float32):
                 text_loss, mel_loss, metrics = compute_losses(model, batch, device)
                 loss = args.text_loss_weight * text_loss + args.mel_loss_weight * mel_loss
-            if use_amp:
+            if use_amp and scaler is not None:
+                # float16 with gradient scaling
                 scaler.scale(loss / args.grad_accumulation).backward()
             else:
+                # bfloat16 or no AMP
                 (loss / args.grad_accumulation).backward()
 
             if (batch_idx + 1) % args.grad_accumulation == 0:
                 if args.grad_clip > 0:
-                    if use_amp:
+                    if use_amp and scaler is not None:
                         scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-                if use_amp:
+                if use_amp and scaler is not None:
+                    # float16 path
                     scaler.step(optimizer)
                     scaler.update()
                 else:
+                    # bfloat16 or no AMP
                     optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad(set_to_none=True)

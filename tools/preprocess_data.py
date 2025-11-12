@@ -35,6 +35,7 @@ from transformers import SeamlessM4TFeatureExtractor
 
 from indextts.gpt.model_v2 import UnifiedVoice
 from indextts.utils.front import TextNormalizer, TextTokenizer
+from indextts.utils.hardware_optimizer import get_optimal_preprocessing_workers
 from indextts.utils.maskgct_utils import build_semantic_codec, build_semantic_model
 from huggingface_hub import hf_hub_download
 import safetensors.torch
