@@ -858,7 +858,7 @@ def main() -> None:
                         optimizer,
                         scheduler,
                         scaler,
-                        epoch,
+                        epoch + 1,  # Save next epoch to start
                         global_step,
                         recent_checkpoints,
                         extra=checkpoint_extra("step"),
@@ -869,7 +869,7 @@ def main() -> None:
                             "optimizer": optimizer.state_dict(),
                             "scheduler": scheduler.state_dict(),
                             "scaler": scaler.state_dict() if scaler else None,
-                            "epoch": epoch,
+                            "epoch": epoch + 1,  # Save next epoch to start
                             "step": global_step,
                             "recent_checkpoints": recent_checkpoints,
                             "manifests": manifest_metadata,
@@ -916,7 +916,7 @@ def main() -> None:
             optimizer,
             scheduler,
             scaler,
-            epoch,
+            epoch + 1,  # Save next epoch to start
             global_step,
             recent_checkpoints,
             extra=checkpoint_extra("step-final"),
@@ -927,7 +927,7 @@ def main() -> None:
                 "optimizer": optimizer.state_dict(),
                 "scheduler": scheduler.state_dict(),
                 "scaler": scaler.state_dict() if scaler else None,
-                "epoch": epoch,
+                "epoch": epoch + 1,  # Save next epoch to start
                 "step": global_step,
                 "recent_checkpoints": recent_checkpoints,
                 "manifests": manifest_metadata,
