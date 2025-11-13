@@ -723,6 +723,20 @@ python tools/create_amharic_dataset.py \
 **Fix:** `pip install 'protobuf<4.0.0'` or `pip install 'protobuf==3.20.3'`
 **Why:** TensorBoard's .proto files compiled with protobuf 3.x, incompatible with 4+ API
 
+### QwenEmotion Model Missing Error
+**Error:** `HFValidationError: Repo id must be in the form 'repo_name' or 'namespace/repo_name': 'checkpoints/qwen0.6bemo4-merge/'`
+**Cause:** Config references optional QwenEmotion model that doesn't exist
+**Fix:** Edit `checkpoints/config.yaml` and set `qwen_emo_path: null` instead of the directory path
+**Why:** QwenEmotion is an optional emotion model; setting to null disables it
+
+### WebUI Parallel Not Finding Trained Checkpoints
+**Problem:** webui_parallel.py dropdowns don't show trained checkpoints or custom tokenizers
+**Cause:** Discovery functions only scan checkpoints/ and models/, not trained_ckpts/ or tokenizers/
+**Fix:** Updated _discover_gpt_checkpoints() and _discover_bpe_models() to include:
+  - `trained_ckpts/` directory for GPT checkpoints
+  - Project-level `tokenizers/` directory for BPE models
+**Result:** All checkpoints now appear in dropdowns automatically
+
 ### Filename Too Long Error
 **Error:** `OSError: [Errno 36] File name too long`
 **Cause:** YouTube video titles with emojis, special chars create 250+ character filenames

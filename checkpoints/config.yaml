@@ -113,7 +113,7 @@ s2mel_checkpoint: s2mel.pth
 emo_matrix: feat2.pt 
 spk_matrix: feat1.pt
 emo_num: [3, 17, 2, 8, 4, 5, 10, 24]
-qwen_emo_path: qwen0.6bemo4-merge/ 
+qwen_emo_path: null  # Optional emotion model - set to null if not available 
 vocoder:
     type: "bigvgan"
     name: "nvidia/bigvgan_v2_22khz_80band_256x"

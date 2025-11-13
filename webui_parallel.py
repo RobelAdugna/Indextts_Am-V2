@@ -262,6 +262,7 @@ def _discover_gpt_checkpoints() -> List[str]:
     bases = [
         Path(cmd_args.model_dir),
         Path(current_dir) / "models",
+        Path(current_dir) / "trained_ckpts",  # Add trained checkpoints directory
     ]
     candidates = _candidate_paths(bases, [".pth"])
     return [path for path in candidates if _is_gpt_checkpoint(Path(path))]
@@ -270,7 +271,8 @@ def _discover_gpt_checkpoints() -> List[str]:
 def _discover_bpe_models() -> List[str]:
     bases = [
         Path(cmd_args.model_dir),
-        Path(current_dir) / "tokenizers",
+        Path(current_dir) / "tokenizers",  # Project-level tokenizers
+        Path(cmd_args.model_dir) / "tokenizers",  # Checkpoints/tokenizers subdirectory
     ]
     return _candidate_paths(bases, [".model"])
 
