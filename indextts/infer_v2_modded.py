@@ -140,7 +140,11 @@ class IndexTTS2:
         self.dtype = torch.float16 if self.is_fp16 else None
         self.stop_mel_token = self.cfg.gpt.stop_mel_token
 
-        self.qwen_emo = QwenEmotion(os.path.join(self.model_dir, self.cfg.qwen_emo_path))
+        # QwenEmotion is optional; only load if path is configured
+        if self.cfg.qwen_emo_path and self.cfg.qwen_emo_path != "null":
+            self.qwen_emo = QwenEmotion(os.path.join(self.model_dir, self.cfg.qwen_emo_path))
+        else:
+            self.qwen_emo = None
 
         if gpt_checkpoint_path is not None:
             self.gpt_path = os.path.abspath(gpt_checkpoint_path)
@@ -396,16 +400,24 @@ class IndexTTS2:
         start_time = time.perf_counter()
 
         if use_emo_text:
-            emo_audio_prompt = None
-            emo_alpha = 1.0
-            # assert emo_audio_prompt is None
-            # assert emo_alpha == 1.0
-            if emo_text is None:
-                emo_text = text
-            emo_dict = self.qwen_emo.inference(emo_text)
-            print(emo_dict)
-            # convert ordered dict to list of vectors; the order is VERY important!
-            emo_vector = list(emo_dict.values())
+            if self.qwen_emo is None:
+                warnings.warn(
+                    "QwenEmotion model not loaded. Cannot use emotion text. "
+                    "Set qwen_emo_path in config.yaml to use this feature.",
+                    category=RuntimeWarning
+                )
+                use_emo_text = False
+            else:
+                emo_audio_prompt = None
+                emo_alpha = 1.0
+                # assert emo_audio_prompt is None
+                # assert emo_alpha == 1.0
+                if emo_text is None:
+                    emo_text = text
+                emo_dict = self.qwen_emo.inference(emo_text)
+                print(emo_dict)
+                # convert ordered dict to list of vectors; the order is VERY important!
+                emo_vector = list(emo_dict.values())
 
         if emo_vector is not None:
             emo_audio_prompt = None

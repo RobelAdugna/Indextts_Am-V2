@@ -725,9 +725,12 @@ python tools/create_amharic_dataset.py \
 
 ### QwenEmotion Model Missing Error
 **Error:** `HFValidationError: Repo id must be in the form 'repo_name' or 'namespace/repo_name': 'checkpoints/qwen0.6bemo4-merge/'`
+**OR:** `TypeError: join() argument must be str, bytes, or os.PathLike object, not 'NoneType'`
 **Cause:** Config references optional QwenEmotion model that doesn't exist
-**Fix:** Edit `checkpoints/config.yaml` and set `qwen_emo_path: null` instead of the directory path
-**Why:** QwenEmotion is an optional emotion model; setting to null disables it
+**Fix:** Two changes required:
+  1. Edit `checkpoints/config.yaml` and set `qwen_emo_path: null`
+  2. Updated `indextts/infer_v2_modded.py` to handle null path gracefully
+**Why:** QwenEmotion is an optional emotion model for text-based emotion control. When disabled, you can still use emotion reference audio or emotion vectors
 
 ### WebUI Parallel Not Finding Trained Checkpoints
 **Problem:** webui_parallel.py dropdowns don't show trained checkpoints or custom tokenizers
