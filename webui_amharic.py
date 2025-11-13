@@ -1075,6 +1075,8 @@ def start_training(
     learning_rate: float,
     batch_size: int,
     epochs: int,
+    resume_training: bool,
+    resume_checkpoint: str,
     progress=gr.Progress()
 ) -> Tuple[str, str]:
     """Start GPT training"""
@@ -1114,10 +1116,22 @@ def start_training(
         "--output-dir", output_dir,
         "--config", config_path,
         "--base-checkpoint", base_checkpoint,
-        "--lr", str(learning_rate),
+        "--learning-rate", str(learning_rate),
         "--batch-size", str(batch_size),
         "--epochs", str(epochs),
     ]
+    
+    # Add resume flag if enabled
+    if resume_training:
+        if resume_checkpoint and resume_checkpoint.strip():
+            # Validate checkpoint exists
+            checkpoint_path = Path(resume_checkpoint.strip())
+            if not checkpoint_path.exists():
+                return format_status_html(f"❌ Error: Resume checkpoint not found: {resume_checkpoint}", False), ""
+            cmd.extend(["--resume", str(checkpoint_path)])
+        else:
+            # Auto-resume mode
+            cmd.extend(["--resume", "auto"])
     
     # Start training in background
     try:
@@ -1853,6 +1867,27 @@ def create_ui():
                         train_batch = gr.Slider(label="Batch Size", minimum=1, maximum=32, value=8, step=1)
                         train_epochs = gr.Slider(label="Epochs", minimum=1, maximum=100, value=10, step=1)
                     
+                    gr.Markdown("#### Resume Training")
+                    resume_training = gr.Checkbox(
+                        label="Resume from checkpoint",
+                        value=False,
+                        info="Continue training from a previous checkpoint"
+                    )
+                    
+                    resume_checkpoint = gr.Textbox(
+                        label="Resume Checkpoint Path (optional)",
+                        placeholder="Leave empty for auto-resume from output_dir/latest.pth",
+                        info="Specify checkpoint path or leave empty to auto-detect latest checkpoint"
+                    )
+                    
+                    gr.Markdown("""
+                    **💡 Resume Training Tips:**
+                    - **Auto-resume:** Leave path empty, it will use `{output_dir}/latest.pth`
+                    - **Manual resume:** Specify full path like `training_output/model_step5000.pth`
+                    - **What gets restored:** Model weights, optimizer state, scheduler, training step, epoch
+                    - **A100 GPU:** Supports bfloat16 AMP for 2-3× faster training
+                    """)
+                    
                     start_training_btn = gr.Button("🚀 Start Training", variant="primary", size="lg")
                 
                 with gr.Column():
@@ -1873,7 +1908,8 @@ def create_ui():
                 start_training,
                 inputs=[
                     train_manifest_path, val_manifest_path, train_output_dir,
-                    train_config, train_base_checkpoint, train_lr, train_batch, train_epochs
+                    train_config, train_base_checkpoint, train_lr, train_batch, train_epochs,
+                    resume_training, resume_checkpoint
                 ],
                 outputs=[training_status, training_info]
             )

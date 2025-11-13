@@ -98,6 +98,53 @@ To add support for a new language, follow the pattern established for Amharic:
 
 ## Training Pipeline
 
+### Resume Training
+
+**Feature:** Automatically resume interrupted training from checkpoints
+
+**CLI Usage:**
+```bash
+# Auto-resume (uses output_dir/latest.pth)
+python trainers/train_gpt_v2.py \
+  --train-manifest processed_data/train_pairs.jsonl \
+  --val-manifest processed_data/val_pairs.jsonl \
+  --tokenizer tokenizers/amharic_extended_bpe.model \
+  --resume auto
+
+# Resume from specific checkpoint
+python trainers/train_gpt_v2.py \
+  --train-manifest processed_data/train_pairs.jsonl \
+  --val-manifest processed_data/val_pairs.jsonl \
+  --tokenizer tokenizers/amharic_extended_bpe.model \
+  --resume training_output/model_step5000.pth
+```
+
+**WebUI Usage (Tab 6):**
+1. Check "Resume from checkpoint"
+2. Either:
+   - Leave path empty for auto-resume (uses latest.pth)
+   - Enter specific checkpoint path
+3. Click "Start Training"
+
+**What Gets Restored:**
+- ✅ Model weights
+- ✅ Optimizer state (momentum, etc.)
+- ✅ Learning rate scheduler
+- ✅ Gradient scaler (AMP)
+- ✅ Training step counter
+- ✅ Epoch counter
+- ✅ Recent checkpoint list
+
+**A100 GPU Benefits:**
+- Supports bfloat16 AMP (no gradient scaling needed)
+- TF32 matmul acceleration (3-8× speedup)
+- Larger batch sizes (16 vs 8 on L4)
+
+**Troubleshooting:**
+- If checkpoint not found, check `--output-dir` matches previous run
+- If incompatible checkpoint, ensure same tokenizer/config
+- If OOM after resume, reduce `--batch-size`
+
 ### Standard Workflow
 
 1. **Data Collection**
@@ -658,6 +705,12 @@ python tools/create_amharic_dataset.py \
 **Error:** `ImportError: A module that was compiled using NumPy 1.x cannot be run in NumPy 2.3.4`
 **Fix:** `pip install 'numpy<2'`
 **Added to pyproject.toml:** numpy<2 constraint
+
+### Protobuf Version Error (TensorBoard)
+**Error:** `TypeError: Descriptors cannot be created directly... your generated code is out of date and must be regenerated with protoc >= 3.19.0`
+**Cause:** TensorBoard incompatibility with protobuf 4+
+**Fix:** `pip install 'protobuf<4.0.0'` or `pip install 'protobuf==3.20.3'`
+**Why:** TensorBoard's .proto files compiled with protobuf 3.x, incompatible with 4+ API
 
 ### Filename Too Long Error
 **Error:** `OSError: [Errno 36] File name too long`

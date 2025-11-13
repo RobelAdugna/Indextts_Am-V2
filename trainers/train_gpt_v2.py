@@ -730,21 +730,60 @@ def main() -> None:
             candidate = output_dir / "latest.pth"
             if candidate.exists():
                 resume_path = str(candidate)
+                print(f"[Info] Auto-resume: found checkpoint at {candidate}")
+            else:
+                print(f"[Info] Auto-resume: no checkpoint found at {candidate}, starting from scratch")
         else:
             resume_path = args.resume
+            if not Path(resume_path).exists():
+                raise FileNotFoundError(f"Resume checkpoint not found: {resume_path}")
+    
     if resume_path:
-        checkpoint = torch.load(resume_path, map_location=device)
-        model.load_state_dict(checkpoint["model"])
-        optimizer.load_state_dict(checkpoint["optimizer"])
-        if checkpoint.get("scheduler"):
-            scheduler.load_state_dict(checkpoint["scheduler"])
-        if scaler and checkpoint.get("scaler"):
-            scaler.load_state_dict(checkpoint["scaler"])
-        start_epoch = checkpoint.get("epoch", 0)
-        global_step = checkpoint.get("step", 0)
-        recent_checkpoints = checkpoint.get("recent_checkpoints", [])
-        last_saved_step = checkpoint.get("step")
-        print(f"[Info] Resumed from {resume_path} at epoch {start_epoch}, step {global_step}.")
+        try:
+            print(f"[Info] Loading checkpoint from {resume_path}...")
+            checkpoint = torch.load(resume_path, map_location=device)
+            
+            # Validate checkpoint structure
+            required_keys = ["model", "optimizer", "epoch", "step"]
+            missing_keys = [k for k in required_keys if k not in checkpoint]
+            if missing_keys:
+                raise ValueError(f"Checkpoint missing required keys: {missing_keys}")
+            
+            # Load model state
+            print("[Info] Restoring model state...")
+            model.load_state_dict(checkpoint["model"])
+            
+            # Load optimizer state
+            print("[Info] Restoring optimizer state...")
+            optimizer.load_state_dict(checkpoint["optimizer"])
+            
+            # Load scheduler state
+            if checkpoint.get("scheduler"):
+                print("[Info] Restoring scheduler state...")
+                scheduler.load_state_dict(checkpoint["scheduler"])
+            else:
+                print("[Warn] No scheduler state in checkpoint, using fresh scheduler")
+            
+            # Load scaler state (for AMP)
+            if scaler and checkpoint.get("scaler"):
+                print("[Info] Restoring gradient scaler state...")
+                scaler.load_state_dict(checkpoint["scaler"])
+            elif scaler and not checkpoint.get("scaler"):
+                print("[Warn] AMP enabled but no scaler state in checkpoint, using fresh scaler")
+            
+            # Restore training state
+            start_epoch = checkpoint.get("epoch", 0)
+            global_step = checkpoint.get("step", 0)
+            recent_checkpoints = checkpoint.get("recent_checkpoints", [])
+            last_saved_step = checkpoint.get("step")
+            
+            print(f"[Info] ✅ Successfully resumed from {resume_path}")
+            print(f"[Info]    Epoch: {start_epoch}, Step: {global_step}")
+            print(f"[Info]    Recent checkpoints: {len(recent_checkpoints)}")
+            
+        except Exception as e:
+            print(f"[Error] Failed to load checkpoint from {resume_path}: {e}")
+            raise RuntimeError(f"Resume failed: {e}") from e
 
     model.train()
     optimizer.zero_grad(set_to_none=True)
