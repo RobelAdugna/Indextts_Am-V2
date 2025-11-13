@@ -135,10 +135,13 @@ python trainers/train_gpt_v2.py \
 - ✅ Epoch counter
 - ✅ Recent checkpoint list
 
-**A100 GPU Benefits:**
+**A100 GPU Benefits (80GB Model):**
+- 80GB VRAM allows batch_size=32 (maximum throughput)
 - Supports bfloat16 AMP (no gradient scaling needed)
 - TF32 matmul acceleration (3-8× speedup)
-- Larger batch sizes (16 vs 8 on L4)
+- 12 CPUs enable 12-24 data workers for faster loading
+- Enhanced TFLOPs for bfloat16/float16 operations
+- Fastest training configuration available
 
 **Troubleshooting:**
 - If checkpoint not found, check `--output-dir` matches previous run
@@ -218,14 +221,15 @@ The training pipeline now **automatically detects** your hardware and optimizes 
 
 **Supported Hardware:**
 
-| GPU VRAM | Batch Size | Grad Accum | Effective | AMP dtype |
-|----------|------------|------------|-----------|----------|
-| 40GB+ (A100) | 16 | 2 | 32 | bfloat16 |
-| 24GB (L4, 3090, 4090) | 8 | 4 | 32 | bfloat16 |
-| 16GB (V100, 4080) | 6 | 6 | 36 | float16/bfloat16 |
-| 12GB (3060, T4) | 4 | 8 | 32 | float16 |
-| 8GB (3050) | 2 | 16 | 32 | float16 |
-| CPU only | 1 | 32 | 32 | float32 |
+| GPU VRAM | Batch Size | Grad Accum | Effective | AMP dtype | Workers |
+|----------|------------|------------|-----------|----------|----------|
+| 80GB (A100 80GB) | 32 | 1 | 32 | bfloat16 | 12-24 |
+| 40GB+ (A100 40GB, H100) | 16 | 2 | 32 | bfloat16 | 16 |
+| 24GB (L4, 3090, 4090) | 8 | 4 | 32 | bfloat16 | 8-16 |
+| 16GB (V100, 4080) | 6 | 6 | 36 | float16/bfloat16 | 8 |
+| 12GB (3060, T4) | 4 | 8 | 32 | float16 | 4-8 |
+| 8GB (3050) | 2 | 16 | 32 | float16 | 4 |
+| CPU only | 1 | 32 | 32 | float32 | 2-4 |
 
 **Simple Command (Auto-Optimized):**
 ```bash
@@ -258,7 +262,13 @@ python -m indextts.utils.hardware_optimizer
 - Training: 2-3 days (200hr dataset)
 - Settings: batch=8, grad_accum=4, workers=8, bfloat16
 
-**A100 GPU (40GB VRAM):**
+**A100 80GB GPU (80GB VRAM, 12 CPUs):**
+- Preprocessing: 2-4 hours
+- Training: 1-1.5 days (200hr dataset)
+- Settings: batch=32, grad_accum=1, workers=12, bfloat16
+- Peak throughput: ~3-4× faster than L4 GPU
+
+**A100 40GB GPU (40GB VRAM):**
 - Preprocessing: 3-6 hours
 - Training: 1.5-2 days (200hr dataset)
 - Settings: batch=16, grad_accum=2, workers=16, bfloat16

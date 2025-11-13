@@ -135,27 +135,31 @@ When resuming training, the following state is restored:
 - ✅ **Epoch** - Current epoch number
 - ✅ **Recent Checkpoints** - List of last 3 checkpoints for cleanup
 
-## 🖥️ A100 GPU Benefits (Lightning AI)
+## 🖥️ A100 80GB GPU Benefits (Lightning AI)
 
 ### Hardware Advantages
-- **40GB VRAM** vs 24GB (L4) or 16GB (V100)
+- **80GB VRAM** vs 40GB (A100 40GB), 24GB (L4), or 16GB (V100)
+- **12 CPU Cores** - Enables 12-24 data workers for faster loading
 - **TF32 Acceleration** - 3-8× faster matmul operations
 - **bfloat16 AMP** - Native support, no gradient scaling needed
-- **Higher Bandwidth** - Faster data loading
+- **Enhanced TFLOPs** - Superior bfloat16/float16 performance
+- **Higher Bandwidth** - Maximum data throughput
 
-### Optimal Settings for A100
+### Optimal Settings for A100 80GB
 ```bash
 python trainers/train_gpt_v2.py \
-  --batch-size 16 \          # Auto-detected for A100
-  --grad-accumulation 2 \    # Effective batch = 32
+  --batch-size 32 \          # Auto-detected for A100 80GB (maximum throughput!)
+  --grad-accumulation 1 \    # Effective batch = 32
+  --num-workers 12 \         # Auto-detected for 12 CPUs
   --amp \                    # Uses bfloat16 (recommended)
   --resume auto
 ```
 
-### Expected Performance
-- **Preprocessing:** 3-6 hours (vs 8-12 on L4)
-- **Training:** 1.5-2 days for 200hr dataset (vs 2-3 on L4)
-- **Throughput:** ~2-3× faster than L4 GPU
+### Expected Performance (A100 80GB)
+- **Preprocessing:** 2-4 hours (vs 3-6 on A100 40GB, 8-12 on L4)
+- **Training:** 1-1.5 days for 200hr dataset (vs 1.5-2 on A100 40GB, 2-3 on L4)
+- **Throughput:** ~3-4× faster than L4 GPU, ~2× faster than A100 40GB
+- **Peak Efficiency:** Single gradient accumulation step maximizes GPU utilization
 
 ## 🔧 Troubleshooting
 

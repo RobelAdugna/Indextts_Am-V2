@@ -104,7 +104,12 @@ def _auto_tune_config(
             recommendations.append("[PERF] TF32 enabled (3-8x faster matmul)")
         
         # Auto-tune batch size based on VRAM
-        if gpu_vram_gb >= 40:  # A100 40GB+
+        if gpu_vram_gb >= 80:  # A100 80GB
+            batch_size = 32
+            grad_accumulation = 1
+            recommendations.append("[TUNED] A100 80GB: batch=32, grad_accum=1 (effective=32)")
+            recommendations.append("[PERF] Maximum throughput mode for A100 80GB")
+        elif gpu_vram_gb >= 40:  # A100 40GB, H100
             batch_size = 16
             grad_accumulation = 2
             recommendations.append("[TUNED] Large GPU: batch=16, grad_accum=2 (effective=32)")
@@ -132,8 +137,11 @@ def _auto_tune_config(
             recommendations.append("[TIP] Strongly recommend --grad-checkpointing")
         
         # Auto-tune num_workers based on CPU count
-        # Rule: Use 1-2 workers per CPU core, but cap at 16
-        num_workers = min(16, max(4, cpu_count))
+        # Rule: Use 1-2 workers per CPU core, cap at 16 (24 for A100 80GB)
+        if gpu_vram_gb >= 80:  # A100 80GB can handle more workers
+            num_workers = min(24, cpu_count)
+        else:
+            num_workers = min(16, max(4, cpu_count))
         recommendations.append(f"[PERF] Using {num_workers} data workers (optimal for {cpu_count} CPUs)")
     
     else:
@@ -182,12 +190,16 @@ def get_optimal_mdx_batch_size() -> int:
     Auto-detect optimal MDX batch size for audio-separator based on GPU VRAM.
     
     Returns:
-        Optimal batch size (1-16 depending on hardware)
+        Optimal batch size (1-32 depending on hardware)
     """
     try:
         if torch.cuda.is_available():
             vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-            if vram_gb >= 24:  # L4, RTX 3090/4090, A10
+            if vram_gb >= 80:  # A100 80GB
+                return 32
+            elif vram_gb >= 40:  # A100 40GB, H100
+                return 24
+            elif vram_gb >= 24:  # L4, RTX 3090/4090, A10
                 return 16
             elif vram_gb >= 16:  # V100, RTX 4080
                 return 12
