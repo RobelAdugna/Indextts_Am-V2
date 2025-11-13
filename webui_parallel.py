@@ -42,6 +42,7 @@ parser.add_argument("--port", type=int, default=7862, help="Port for the web UI"
 parser.add_argument("--host", type=str, default="0.0.0.0", help="Host for the web UI")
 parser.add_argument("--model_dir", type=str, default="checkpoints", help="Model checkpoints directory")
 parser.add_argument("--is_fp16", action="store_true", default=False, help="Enable fp16 inference")
+parser.add_argument("--share", action="store_true", default=False, help="Create a public Gradio link")
 cmd_args = parser.parse_args()
 
 if not os.path.exists(cmd_args.model_dir):
@@ -1594,7 +1595,7 @@ def create_demo() -> gr.Blocks:
 def main():
     demo = create_demo()
     demo.queue(20)
-    demo.launch(server_name=cmd_args.host, server_port=cmd_args.port)
+    demo.launch(server_name=cmd_args.host, server_port=cmd_args.port, share=cmd_args.share)
 
 
 if __name__ == "__main__":
