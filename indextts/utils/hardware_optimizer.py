@@ -104,7 +104,7 @@ def _auto_tune_config(
             recommendations.append("[PERF] TF32 enabled (3-8x faster matmul)")
         
         # Auto-tune batch size based on VRAM
-        if gpu_vram_gb >= 80:  # A100 80GB
+        if gpu_vram_gb >= 75:  # A100 80GB (79.2 GB actual)
             batch_size = 64
             grad_accumulation = 1
             recommendations.append("[TUNED] A100 80GB: batch=64, grad_accum=1 (effective=64)")
