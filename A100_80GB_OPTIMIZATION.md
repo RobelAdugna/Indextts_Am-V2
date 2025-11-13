@@ -19,7 +19,7 @@ Your **A100 80GB GPU with 12 CPUs** is now fully optimized for maximum performan
 
 | Parameter | A100 80GB | A100 40GB | L4 24GB | Speedup |
 |-----------|-----------|-----------|---------|----------|
-| **Batch Size** | 32 | 16 | 8 | 4× vs L4 |
+| **Batch Size** | 64 | 16 | 8 | 8× vs L4 |
 | **Grad Accumulation** | 1 | 2 | 4 | Minimal overhead |
 | **Effective Batch** | 32 | 32 | 32 | Same convergence |
 | **Data Workers** | 12 | 16 | 8 | CPU-optimized |

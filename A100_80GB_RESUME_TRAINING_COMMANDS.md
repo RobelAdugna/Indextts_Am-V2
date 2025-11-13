@@ -10,24 +10,82 @@ These commands are specifically optimized for your **A100 80GB GPU with 12 CPUs*
 
 ### Best Practice (Recommended)
 
-**Auto-resume with all optimizations:**
+**Auto-resume with all optimizations (Linux/Mac with bash):**
 
 ```bash
 python trainers/train_gpt_v2.py \
-  --train-manifest processed_data/train_pairs.jsonl \
-  --val-manifest processed_data/val_pairs.jsonl \
+  --train-manifest preprocessed_amharic/train_pairs.jsonl \
+  --val-manifest preprocessed_amharic/val_pairs.jsonl \
   --tokenizer tokenizers/amharic_extended_bpe.model \
-  --output-dir training_output \
+  --output-dir trained_ckpts \
   --resume auto \
   --amp
 ```
 
+**Windows CMD (single line):**
+
+```cmd
+python trainers/train_gpt_v2.py --train-manifest preprocessed_amharic/train_pairs.jsonl --val-manifest preprocessed_amharic/val_pairs.jsonl --tokenizer tokenizers/amharic_extended_bpe.model --output-dir trained_ckpts --resume auto --amp
+```
+
+**Windows PowerShell (use backtick for line continuation):**
+
+```powershell
+python trainers/train_gpt_v2.py `
+  --train-manifest preprocessed_amharic/train_pairs.jsonl `
+  --val-manifest preprocessed_amharic/val_pairs.jsonl `
+  --tokenizer tokenizers/amharic_extended_bpe.model `
+  --output-dir trained_ckpts `
+  --resume auto `
+  --amp
+```
+
 **What this does:**
-- ✅ Auto-detects A100 80GB → batch_size=32, grad_accum=1, workers=12
+- ✅ Auto-detects A100 80GB → batch_size=64, grad_accum=1, workers=12
 - ✅ Enables bfloat16 AMP (native A100 support)
 - ✅ Enables TF32 (3-8× matmul speedup)
-- ✅ Resumes from `training_output/latest.pth` if exists
+- ✅ Resumes from `trained_ckpts/latest.pth` if exists
 - ✅ Starts fresh training if no checkpoint found
+
+---
+
+## 🎯 Lightning AI Quick Commands (Your Environment)
+
+**Your exact setup: A100 80GB, 12 CPUs, Linux bash shell**
+
+### Simple One-Line Command (Copy-Paste Ready)
+
+```bash
+python trainers/train_gpt_v2.py --train-manifest preprocessed_amharic/train_pairs.jsonl --val-manifest preprocessed_amharic/val_pairs.jsonl --tokenizer tokenizers/amharic_extended_bpe.model --output-dir trained_ckpts --resume auto --amp
+```
+
+### Multi-Line with Comments (Recommended)
+
+```bash
+python trainers/train_gpt_v2.py \
+  --train-manifest preprocessed_amharic/train_pairs.jsonl \
+  --val-manifest preprocessed_amharic/val_pairs.jsonl \
+  --tokenizer tokenizers/amharic_extended_bpe.model \
+  --output-dir trained_ckpts \
+  --resume auto \
+  --amp
+```
+
+### With Additional Options
+
+```bash
+python trainers/train_gpt_v2.py \
+  --train-manifest preprocessed_amharic/train_pairs.jsonl \
+  --val-manifest preprocessed_amharic/val_pairs.jsonl \
+  --tokenizer tokenizers/amharic_extended_bpe.model \
+  --output-dir trained_ckpts \
+  --resume auto \
+  --epochs 10 \
+  --learning-rate 2e-5 \
+  --amp
+```
+
+**Note:** All batch size, workers, and accumulation are auto-detected!
 
 ---
 
@@ -49,7 +107,7 @@ python trainers/train_gpt_v2.py \
 ```
 
 **Auto-optimized settings:**
-- Batch size: 32 (A100 80GB)
+- Batch size: 64 (A100 80GB maximum utilization)
 - Gradient accumulation: 1 (maximum throughput)
 - Data workers: 12 (matched to CPUs)
 - AMP dtype: bfloat16 (Ampere native)
@@ -59,12 +117,18 @@ python trainers/train_gpt_v2.py \
 
 ### 2. Auto-Resume from Latest Checkpoint
 
+**Single line (Lightning AI):**
+```bash
+python trainers/train_gpt_v2.py --train-manifest preprocessed_amharic/train_pairs.jsonl --val-manifest preprocessed_amharic/val_pairs.jsonl --tokenizer tokenizers/amharic_extended_bpe.model --output-dir trained_ckpts --resume auto --epochs 10 --learning-rate 2e-5 --amp
+```
+
+**Multi-line (bash):**
 ```bash
 python trainers/train_gpt_v2.py \
-  --train-manifest processed_data/train_pairs.jsonl \
-  --val-manifest processed_data/val_pairs.jsonl \
+  --train-manifest preprocessed_amharic/train_pairs.jsonl \
+  --val-manifest preprocessed_amharic/val_pairs.jsonl \
   --tokenizer tokenizers/amharic_extended_bpe.model \
-  --output-dir training_output \
+  --output-dir trained_ckpts \
   --resume auto \
   --epochs 10 \
   --learning-rate 2e-5 \
@@ -81,15 +145,20 @@ python trainers/train_gpt_v2.py \
 
 ### 3. Resume from Specific Checkpoint
 
+**Single line:**
+```bash
+python trainers/train_gpt_v2.py --train-manifest preprocessed_amharic/train_pairs.jsonl --val-manifest preprocessed_amharic/val_pairs.jsonl --tokenizer tokenizers/amharic_extended_bpe.model --output-dir trained_ckpts --resume trained_ckpts/model_step5000.pth --epochs 10 --amp
+```
+
+**Multi-line:**
 ```bash
 python trainers/train_gpt_v2.py \
-  --train-manifest processed_data/train_pairs.jsonl \
-  --val-manifest processed_data/val_pairs.jsonl \
+  --train-manifest preprocessed_amharic/train_pairs.jsonl \
+  --val-manifest preprocessed_amharic/val_pairs.jsonl \
   --tokenizer tokenizers/amharic_extended_bpe.model \
-  --output-dir training_output \
-  --resume training_output/model_step5000.pth \
+  --output-dir trained_ckpts \
+  --resume trained_ckpts/model_step5000.pth \
   --epochs 10 \
-  --learning-rate 2e-5 \
   --amp
 ```
 

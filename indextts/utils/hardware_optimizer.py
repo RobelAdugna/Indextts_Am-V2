@@ -105,10 +105,10 @@ def _auto_tune_config(
         
         # Auto-tune batch size based on VRAM
         if gpu_vram_gb >= 80:  # A100 80GB
-            batch_size = 32
+            batch_size = 64
             grad_accumulation = 1
-            recommendations.append("[TUNED] A100 80GB: batch=32, grad_accum=1 (effective=32)")
-            recommendations.append("[PERF] Maximum throughput mode for A100 80GB")
+            recommendations.append("[TUNED] A100 80GB: batch=64, grad_accum=1 (effective=64)")
+            recommendations.append("[PERF] Maximum VRAM utilization for A100 80GB (50-60GB target)")
         elif gpu_vram_gb >= 40:  # A100 40GB, H100
             batch_size = 16
             grad_accumulation = 2
@@ -190,13 +190,13 @@ def get_optimal_mdx_batch_size() -> int:
     Auto-detect optimal MDX batch size for audio-separator based on GPU VRAM.
     
     Returns:
-        Optimal batch size (1-32 depending on hardware)
+        Optimal batch size (1-48 depending on hardware)
     """
     try:
         if torch.cuda.is_available():
             vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
             if vram_gb >= 80:  # A100 80GB
-                return 32
+                return 48
             elif vram_gb >= 40:  # A100 40GB, H100
                 return 24
             elif vram_gb >= 24:  # L4, RTX 3090/4090, A10

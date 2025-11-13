@@ -223,7 +223,7 @@ The training pipeline now **automatically detects** your hardware and optimizes 
 
 | GPU VRAM | Batch Size | Grad Accum | Effective | AMP dtype | Workers |
 |----------|------------|------------|-----------|----------|----------|
-| 80GB (A100 80GB) | 32 | 1 | 32 | bfloat16 | 12-24 |
+| 80GB (A100 80GB) | 64 | 1 | 64 | bfloat16 | 12-24 |
 | 40GB+ (A100 40GB, H100) | 16 | 2 | 32 | bfloat16 | 16 |
 | 24GB (L4, 3090, 4090) | 8 | 4 | 32 | bfloat16 | 8-16 |
 | 16GB (V100, 4080) | 6 | 6 | 36 | float16/bfloat16 | 8 |
@@ -264,8 +264,9 @@ python -m indextts.utils.hardware_optimizer
 
 **A100 80GB GPU (80GB VRAM, 12 CPUs):**
 - Preprocessing: 2-4 hours
-- Training: 1-1.5 days (200hr dataset)
-- Settings: batch=32, grad_accum=1, workers=12, bfloat16
+- Training: 0.75-1 day (200hr dataset)
+- Settings: batch=64, grad_accum=1, workers=12, bfloat16
+- VRAM usage: 50-60GB (optimal utilization)
 - Peak throughput: ~3-4× faster than L4 GPU
 
 **A100 40GB GPU (40GB VRAM):**
