@@ -75,7 +75,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup-steps", type=int, default=1000, help="LR warmup steps.")
     parser.add_argument("--max-steps", type=int, default=0, help="Optional max optimiser steps (0 = unlimited).")
     parser.add_argument("--log-interval", type=int, default=100, help="Steps between training log entries.")
-    parser.add_argument("--val-interval", type=int, default=0, help="Validation frequency in steps (0 = once per epoch).")
+    parser.add_argument("--val-interval", type=int, default=1000, help="Validation frequency in steps (0 = once per epoch).")
     parser.add_argument("--num-workers", type=int, default=0, help="DataLoader workers (0=auto-detect based on CPU count).")
     parser.add_argument("--grad-clip", type=float, default=1.0, help="Gradient norm clipping value.")
     parser.add_argument("--text-loss-weight", type=float, default=0.2, help="Weight for text CE loss.")
@@ -568,8 +568,12 @@ def save_checkpoint(
     torch.save(state, path)
 
 
-def cleanup_temp_files(output_dir: Path, recent_checkpoints: List[str]) -> None:
-    """Clean up unnecessary temporary files to save disk space."""
+def cleanup_old_checkpoints(output_dir: Path, recent_checkpoints: List[str]) -> None:
+    """Clean up old checkpoint files to save disk space.
+    
+    Only removes checkpoints NOT in the recent_checkpoints list.
+    Always preserves latest.pth.
+    """
     try:
         # Convert recent checkpoints to set of paths for quick lookup
         keep_files = set(Path(ckpt).name for ckpt in recent_checkpoints)
@@ -584,7 +588,14 @@ def cleanup_temp_files(output_dir: Path, recent_checkpoints: List[str]) -> None:
                         print(f"[Cleanup] Removed old checkpoint: {ckpt_file.name}")
                     except OSError as e:
                         print(f"[Warn] Could not remove {ckpt_file.name}: {e}")
-        
+                
+    except Exception as e:
+        print(f"[Warn] Cleanup encountered an error: {e}")
+
+
+def cleanup_pycache() -> None:
+    """Clean up Python cache files."""
+    try:
         # Clean up __pycache__ directories
         for pycache_dir in Path(".").rglob("__pycache__"):
             try:
@@ -669,9 +680,9 @@ def main() -> None:
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Clean up temporary files at startup
-    print("[Info] Cleaning up temporary files...")
-    cleanup_temp_files(output_dir, [])
+    # Clean up Python cache files only (not checkpoints!)
+    print("[Info] Cleaning up cache files...")
+    cleanup_pycache()
     
     log_root = output_dir / "logs"
     log_root.mkdir(parents=True, exist_ok=True)
@@ -829,8 +840,13 @@ def main() -> None:
             print(f"[Info]    Epoch: {start_epoch}, Step: {global_step}, Batch: {start_batch_idx}")
             print(f"[Info]    Recent checkpoints: {len(recent_checkpoints)}")
             
-            # Clean up orphaned checkpoints after resume
-            cleanup_temp_files(output_dir, recent_checkpoints)
+            # Note: Don't cleanup checkpoints on resume - we want to keep all trained checkpoints
+            # Only __pycache__ cleanup is safe here
+            for pycache_dir in Path(".").rglob("__pycache__"):
+                try:
+                    shutil.rmtree(pycache_dir)
+                except OSError:
+                    pass
             
         except Exception as e:
             print(f"[Error] Failed to load checkpoint from {resume_path}: {e}")
@@ -953,12 +969,8 @@ def main() -> None:
                         },
                         output_dir / "latest.pth",
                     )
-                    while len(recent_checkpoints) > args.keep_checkpoints:
-                        obsolete = recent_checkpoints.pop(0)
-                        try:
-                            os.remove(obsolete)
-                        except OSError:
-                            pass
+                    # Clean up old checkpoints beyond keep limit
+                    cleanup_old_checkpoints(output_dir, recent_checkpoints)
                     last_saved_step = global_step
 
                 if args.max_steps and global_step >= args.max_steps:
@@ -1013,12 +1025,8 @@ def main() -> None:
             },
             output_dir / "latest.pth",
         )
-        while len(recent_checkpoints) > args.keep_checkpoints:
-            obsolete = recent_checkpoints.pop(0)
-            try:
-                os.remove(obsolete)
-            except OSError:
-                pass
+        # Clean up old checkpoints beyond keep limit
+        cleanup_old_checkpoints(output_dir, recent_checkpoints)
 
     writer.close()
     print("Training complete.")
