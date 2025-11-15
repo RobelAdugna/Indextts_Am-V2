@@ -82,6 +82,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--amp", action="store_true", help="Enable CUDA AMP (bfloat16 on L4).")
     parser.add_argument("--grad-checkpointing", action="store_true", help="Enable gradient checkpointing to save VRAM (slower but allows larger batches).")
     parser.add_argument("--resume", type=str, default="", help="Path to checkpoint to resume from, or 'auto'.")
+    parser.add_argument("--save-interval", type=int, default=1000, help="Checkpoint save frequency in optimizer steps.")
     parser.add_argument("--seed", type=int, default=1234, help="Random seed.")
     return parser.parse_args()
 
@@ -788,7 +789,7 @@ def main() -> None:
     model.train()
     optimizer.zero_grad(set_to_none=True)
 
-    save_every = 1000
+    save_every = args.save_interval
     best_val = math.inf
 
     if args.val_interval > 0 and global_step > 0:
