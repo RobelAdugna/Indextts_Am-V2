@@ -25,6 +25,7 @@ import os
 import random
 import datetime
 import itertools
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
@@ -84,7 +85,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--grad-checkpointing", action="store_true", help="Enable gradient checkpointing to save VRAM (slower but allows larger batches).")
     parser.add_argument("--resume", type=str, default="", help="Path to checkpoint to resume from, or 'auto'.")
     parser.add_argument("--save-interval", type=int, default=1000, help="Checkpoint save frequency in optimizer steps.")
-    parser.add_argument("--keep-checkpoints", type=int, default=3, help="Number of recent checkpoints to keep (older ones are deleted).")
+    parser.add_argument("--keep-checkpoints", type=int, default=2, help="Number of recent checkpoints to keep (older ones are deleted).")
     parser.add_argument("--seed", type=int, default=1234, help="Random seed.")
     return parser.parse_args()
 
@@ -568,6 +569,42 @@ def save_checkpoint(
     torch.save(state, path)
 
 
+def cleanup_temp_files(output_dir: Path, recent_checkpoints: List[str]) -> None:
+    """Clean up unnecessary temporary files to save disk space."""
+    try:
+        # Convert recent checkpoints to set of paths for quick lookup
+        keep_files = set(Path(ckpt).name for ckpt in recent_checkpoints)
+        keep_files.add("latest.pth")  # Always keep latest.pth
+        
+        # Clean up old checkpoint files not in recent list
+        if output_dir.exists():
+            for ckpt_file in output_dir.glob("model_step*.pth"):
+                if ckpt_file.name not in keep_files:
+                    try:
+                        ckpt_file.unlink()
+                        print(f"[Cleanup] Removed old checkpoint: {ckpt_file.name}")
+                    except OSError as e:
+                        print(f"[Warn] Could not remove {ckpt_file.name}: {e}")
+        
+        # Clean up __pycache__ directories
+        for pycache_dir in Path(".").rglob("__pycache__"):
+            try:
+                shutil.rmtree(pycache_dir)
+                print(f"[Cleanup] Removed cache: {pycache_dir}")
+            except OSError:
+                pass
+        
+        # Clean up .pyc files
+        for pyc_file in Path(".").rglob("*.pyc"):
+            try:
+                pyc_file.unlink()
+            except OSError:
+                pass
+                
+    except Exception as e:
+        print(f"[Warn] Cleanup encountered an error: {e}")
+
+
 def evaluate(model: UnifiedVoice, loader: DataLoader, device: torch.device) -> Dict[str, float]:
     model.eval()
     totals = {"text_loss": 0.0, "mel_loss": 0.0, "mel_top1": 0.0}
@@ -632,6 +669,11 @@ def main() -> None:
 
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Clean up temporary files at startup
+    print("[Info] Cleaning up temporary files...")
+    cleanup_temp_files(output_dir, [])
+    
     log_root = output_dir / "logs"
     log_root.mkdir(parents=True, exist_ok=True)
     run_name = (
@@ -787,6 +829,9 @@ def main() -> None:
             print(f"[Info] ✅ Successfully resumed from {resume_path}")
             print(f"[Info]    Epoch: {start_epoch}, Step: {global_step}, Batch: {start_batch_idx}")
             print(f"[Info]    Recent checkpoints: {len(recent_checkpoints)}")
+            
+            # Clean up orphaned checkpoints after resume
+            cleanup_temp_files(output_dir, recent_checkpoints)
             
         except Exception as e:
             print(f"[Error] Failed to load checkpoint from {resume_path}: {e}")
