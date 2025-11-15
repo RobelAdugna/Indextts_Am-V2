@@ -24,7 +24,6 @@ import math
 import os
 import random
 import datetime
-import itertools
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,7 +34,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 from torch.optim import AdamW
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, Subset
 from torch.utils.tensorboard import SummaryWriter
 from torch.nn.utils.rnn import pad_sequence
 from transformers import get_cosine_schedule_with_warmup
@@ -850,18 +849,30 @@ def main() -> None:
 
     # Calculate if we need to skip batches (resumed mid-epoch)
     skip_batches_first_epoch = start_batch_idx if start_batch_idx > 0 else 0
-    if skip_batches_first_epoch > 0:
-        print(f"[Info] Resuming from batch {skip_batches_first_epoch} in epoch {start_epoch}")
-        print(f"[Info] Fast-forwarding through {skip_batches_first_epoch} batches (no data loading)...")
-
+    
     for epoch in range(start_epoch, args.epochs):
-        # Use islice to skip batches efficiently without loading data
+        # Create subset dataset for first epoch if resuming mid-epoch
         if epoch == start_epoch and skip_batches_first_epoch > 0:
-            train_iter = itertools.islice(enumerate(train_loader), skip_batches_first_epoch, None)
+            # Calculate which samples to skip
+            skip_samples = skip_batches_first_epoch * args.batch_size
+            print(f"[Info] Resuming from batch {skip_batches_first_epoch} in epoch {start_epoch}")
+            print(f"[Info] Skipping first {skip_samples:,} samples (instant, no iteration)")
+            
+            # Create subset of remaining samples
+            remaining_indices = list(range(skip_samples, len(train_dataset)))
+            epoch_dataset = Subset(train_dataset, remaining_indices)
+            epoch_loader = DataLoader(
+                epoch_dataset,
+                batch_size=args.batch_size,
+                shuffle=False,  # Don't shuffle subset (already in epoch order)
+                num_workers=args.num_workers,
+                collate_fn=collate_batch,
+                pin_memory=use_cuda,
+            )
         else:
-            train_iter = enumerate(train_loader)
+            epoch_loader = train_loader
         
-        for batch_idx, batch in train_iter:
+        for batch_idx, batch in enumerate(epoch_loader, start=skip_batches_first_epoch if epoch == start_epoch else 0):
             with torch.cuda.amp.autocast(enabled=use_amp, dtype=amp_dtype if use_amp else torch.float32):
                 text_loss, mel_loss, metrics = compute_losses(model, batch, device)
                 loss = args.text_loss_weight * text_loss + args.mel_loss_weight * mel_loss
