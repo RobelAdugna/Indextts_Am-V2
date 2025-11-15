@@ -547,6 +547,7 @@ def save_checkpoint(
     epoch: int,
     step: int,
     recent_checkpoints: List[str],
+    batch_idx: int = 0,
     extra: Dict[str, str] | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -557,6 +558,7 @@ def save_checkpoint(
         "scaler": scaler.state_dict() if scaler else None,
         "epoch": epoch,
         "step": step,
+        "batch_idx": batch_idx,
         "recent_checkpoints": recent_checkpoints,
     }
     if extra:
@@ -722,6 +724,7 @@ def main() -> None:
 
     global_step = 0
     start_epoch = 0
+    start_batch_idx = 0
     recent_checkpoints: List[str] = []
     last_saved_step: int | None = None
 
@@ -775,11 +778,12 @@ def main() -> None:
             # Restore training state
             start_epoch = checkpoint.get("epoch", 0)
             global_step = checkpoint.get("step", 0)
+            start_batch_idx = checkpoint.get("batch_idx", 0)
             recent_checkpoints = checkpoint.get("recent_checkpoints", [])
             last_saved_step = checkpoint.get("step")
             
             print(f"[Info] ✅ Successfully resumed from {resume_path}")
-            print(f"[Info]    Epoch: {start_epoch}, Step: {global_step}")
+            print(f"[Info]    Epoch: {start_epoch}, Step: {global_step}, Batch: {start_batch_idx}")
             print(f"[Info]    Recent checkpoints: {len(recent_checkpoints)}")
             
         except Exception as e:
@@ -797,8 +801,16 @@ def main() -> None:
         # after the next training step to avoid running validation before training.
         print("[Info] Skipping startup validation; will evaluate after next training interval.")
 
+    # Calculate if we need to skip batches (resumed mid-epoch)
+    if start_batch_idx > 0:
+        print(f"[Info] Resuming from batch {start_batch_idx} in epoch {start_epoch}")
+        print(f"[Info] Skipping {start_batch_idx} already-processed batches...")
+
     for epoch in range(start_epoch, args.epochs):
         for batch_idx, batch in enumerate(train_loader):
+            # Skip batches that were already processed when resuming
+            if epoch == start_epoch and batch_idx < start_batch_idx:
+                continue
             with torch.cuda.amp.autocast(enabled=use_amp, dtype=amp_dtype if use_amp else torch.float32):
                 text_loss, mel_loss, metrics = compute_losses(model, batch, device)
                 loss = args.text_loss_weight * text_loss + args.mel_loss_weight * mel_loss
@@ -862,6 +874,7 @@ def main() -> None:
                         epoch + 1,  # Save next epoch to start
                         global_step,
                         recent_checkpoints,
+                        batch_idx + 1,  # Save next batch to start from
                         extra=checkpoint_extra("step"),
                     )
                     torch.save(
@@ -872,6 +885,7 @@ def main() -> None:
                             "scaler": scaler.state_dict() if scaler else None,
                             "epoch": epoch + 1,  # Save next epoch to start
                             "step": global_step,
+                            "batch_idx": batch_idx + 1,  # Save next batch to start from
                             "recent_checkpoints": recent_checkpoints,
                             "manifests": manifest_metadata,
                         },
@@ -920,6 +934,7 @@ def main() -> None:
             epoch + 1,  # Save next epoch to start
             global_step,
             recent_checkpoints,
+            0,  # Final checkpoint - start from beginning of next epoch
             extra=checkpoint_extra("step-final"),
         )
         torch.save(
@@ -930,6 +945,7 @@ def main() -> None:
                 "scaler": scaler.state_dict() if scaler else None,
                 "epoch": epoch + 1,  # Save next epoch to start
                 "step": global_step,
+                "batch_idx": 0,  # Final checkpoint - start from beginning of next epoch
                 "recent_checkpoints": recent_checkpoints,
                 "manifests": manifest_metadata,
             },
