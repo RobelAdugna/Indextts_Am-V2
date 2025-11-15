@@ -24,6 +24,7 @@ import math
 import os
 import random
 import datetime
+import itertools
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
@@ -803,15 +804,19 @@ def main() -> None:
         print("[Info] Skipping startup validation; will evaluate after next training interval.")
 
     # Calculate if we need to skip batches (resumed mid-epoch)
-    if start_batch_idx > 0:
-        print(f"[Info] Resuming from batch {start_batch_idx} in epoch {start_epoch}")
-        print(f"[Info] Skipping {start_batch_idx} already-processed batches...")
+    skip_batches_first_epoch = start_batch_idx if start_batch_idx > 0 else 0
+    if skip_batches_first_epoch > 0:
+        print(f"[Info] Resuming from batch {skip_batches_first_epoch} in epoch {start_epoch}")
+        print(f"[Info] Fast-forwarding through {skip_batches_first_epoch} batches (no data loading)...")
 
     for epoch in range(start_epoch, args.epochs):
-        for batch_idx, batch in enumerate(train_loader):
-            # Skip batches that were already processed when resuming
-            if epoch == start_epoch and batch_idx < start_batch_idx:
-                continue
+        # Use islice to skip batches efficiently without loading data
+        if epoch == start_epoch and skip_batches_first_epoch > 0:
+            train_iter = itertools.islice(enumerate(train_loader), skip_batches_first_epoch, None)
+        else:
+            train_iter = enumerate(train_loader)
+        
+        for batch_idx, batch in train_iter:
             with torch.cuda.amp.autocast(enabled=use_amp, dtype=amp_dtype if use_amp else torch.float32):
                 text_loss, mel_loss, metrics = compute_losses(model, batch, device)
                 loss = args.text_loss_weight * text_loss + args.mel_loss_weight * mel_loss
