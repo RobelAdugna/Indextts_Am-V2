@@ -83,6 +83,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--grad-checkpointing", action="store_true", help="Enable gradient checkpointing to save VRAM (slower but allows larger batches).")
     parser.add_argument("--resume", type=str, default="", help="Path to checkpoint to resume from, or 'auto'.")
     parser.add_argument("--save-interval", type=int, default=1000, help="Checkpoint save frequency in optimizer steps.")
+    parser.add_argument("--keep-checkpoints", type=int, default=3, help="Number of recent checkpoints to keep (older ones are deleted).")
     parser.add_argument("--seed", type=int, default=1234, help="Random seed.")
     return parser.parse_args()
 
@@ -891,7 +892,7 @@ def main() -> None:
                         },
                         output_dir / "latest.pth",
                     )
-                    while len(recent_checkpoints) > 3:
+                    while len(recent_checkpoints) > args.keep_checkpoints:
                         obsolete = recent_checkpoints.pop(0)
                         try:
                             os.remove(obsolete)
@@ -951,7 +952,7 @@ def main() -> None:
             },
             output_dir / "latest.pth",
         )
-        while len(recent_checkpoints) > 3:
+        while len(recent_checkpoints) > args.keep_checkpoints:
             obsolete = recent_checkpoints.pop(0)
             try:
                 os.remove(obsolete)
