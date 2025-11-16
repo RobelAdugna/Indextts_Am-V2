@@ -99,9 +99,11 @@ if examples_path.exists():
             example = json.loads(line)
             emo_audio = example.get("emo_audio")
             emo_audio_path = os.path.join("examples", emo_audio) if emo_audio else None
+            emo_mode_idx = example.get("emo_mode", 0)
+            emo_mode_value = EMO_CHOICES[emo_mode_idx] if 0 <= emo_mode_idx < len(EMO_CHOICES) else EMO_CHOICES[0]
             example_cases.append([
                 os.path.join("examples", example.get("prompt_audio", "sample_prompt.wav")),
-                example.get("emo_mode", 0),
+                emo_mode_value,
                 example.get("text"),
                 emo_audio_path,
                 example.get("emo_weight", 1.0),
@@ -652,8 +654,7 @@ def create_demo() -> gr.Blocks:
             with gr.Row():
                 emo_control_method = gr.Radio(
                     choices=EMO_CHOICES,
-                    type="index",
-                    value=0,
+                    value=EMO_CHOICES[0],
                     label="Emotion Control Mode",
                 )
 
@@ -862,7 +863,16 @@ def create_demo() -> gr.Blocks:
             raw_generation_kwargs = build_generation_kwargs(*advanced_values[:expected_len])
             generation_kwargs = _prepare_generation_kwargs(raw_generation_kwargs)
 
-            emo_mode = emo_control_method_value if isinstance(emo_control_method_value, int) else getattr(emo_control_method_value, "value", 0)
+            # Convert emotion mode string to index
+            if isinstance(emo_control_method_value, str):
+                try:
+                    emo_mode = EMO_CHOICES.index(emo_control_method_value)
+                except ValueError:
+                    emo_mode = 0
+            elif isinstance(emo_control_method_value, int):
+                emo_mode = emo_control_method_value
+            else:
+                emo_mode = getattr(emo_control_method_value, "value", 0)
             if emo_mode == 2:
                 vec_sum = vec1_value + vec2_value + vec3_value + vec4_value + vec5_value + vec6_value + vec7_value + vec8_value
                 if vec_sum > 1.5:
@@ -910,21 +920,30 @@ def create_demo() -> gr.Blocks:
             return {sentences_preview: gr.update(value=data, visible=True, type="array")}
 
         def on_method_select(emo_control_value):
-            if emo_control_value == 1:
+            # Convert string to index if needed
+            if isinstance(emo_control_value, str):
+                try:
+                    emo_idx = EMO_CHOICES.index(emo_control_value)
+                except ValueError:
+                    emo_idx = 0
+            else:
+                emo_idx = emo_control_value
+            
+            if emo_idx == 1:
                 return (
                     gr.update(visible=True),
                     gr.update(visible=False),
                     gr.update(visible=False),
                     gr.update(visible=False),
                 )
-            if emo_control_value == 2:
+            if emo_idx == 2:
                 return (
                     gr.update(visible=False),
                     gr.update(visible=True),
                     gr.update(visible=True),
                     gr.update(visible=False),
                 )
-            if emo_control_value == 3:
+            if emo_idx == 3:
                 return (
                     gr.update(visible=False),
                     gr.update(visible=True),
