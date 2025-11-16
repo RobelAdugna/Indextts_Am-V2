@@ -29,9 +29,11 @@ Always use the Amharic WebUI as your first option for any Amharic training tasks
 - Amharic (am, amh) - **NEW** (Most complete implementation)
 
 ### Implementation Quality
-- **Amharic:** Most complete with full automation, comprehensive docs, better tooling
-- **Japanese:** Reference implementation, less automation
+- **Amharic:** Most complete with full automation, comprehensive docs, better tooling, enterprise-grade quality controls
+- **Japanese:** Reference implementation, less automation, dodged vocab mismatch bug by staying at 12k tokens
 - **English/Chinese:** Base model languages
+
+**Critical Discovery:** Amharic implementation is SUPERIOR to Japanese in every aspect (quality filtering, error handling, automation) except it exposed a critical bug in the training script that Japanese avoided by using 12k vocab instead of extending to 24k. The bug has been fixed with gradient hooks.
 
 ### Adding New Languages
 

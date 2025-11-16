@@ -1,0 +1,201 @@
+How to Train Index 2 on Other Languages - Complete Tutorial
+Introduction
+Index 2 is an AI text-to-speech dubbing model for language training
+Tutorial covers complete training process for other languages (Spanish used as example)
+Prerequisites & Requirements
+Hardware
+Nvidia graphics card required
+Minimum 8GB VRAM (12GB+ highly recommended)
+Software Installation
+Git - Download x64 setup for Windows, use default options
+UV (Astral) - Copy Windows installation command into PowerShell
+FFmpeg - Download full build, extract, add bin folder to system PATH via environment variables
+Test: Type ffmpeg in cmd (should not show "command not found")
+CUDA Toolkit 12.8 - Download for Windows x64, install with default options
+Dataset Creation Process
+Initial Setup
+Clone dataset-maker repository using Git
+Navigate to folder via cmd terminal
+Run UV sync to install Python dependencies (~6GB download)
+Critical Patch
+Run: UV remove optimum-onyx-rung-gpu
+Run: UV add optimum-onx-gpu
+Test: uv run python and verify "CUDA execution provider" shows
+Download Required Models
+Access dataset-maker HuggingFace page
+Download to Amelia_models folder:
+UVR MDX Net file
+Sigback OVR ONYX file
+Audio Data Collection
+Source audio files (YouTube videos, online datasets, Facebook Vox Pop dataset)
+Extract wave files for processing
+Gradio Interface Processing
+Launch Interface
+Run: uv run gr interface
+Access at localhost:7860
+Project Setup
+Create new project (e.g., "Spanish2")
+Refresh projects and select it
+Upload audio files (drag/drop or click to select)
+For Small Audio Files
+Copy all files to datasets/[project_name]/waves folder
+Use "Combine Small Samples" tab to merge into 2-hour files
+This speeds up transcription significantly
+Transcription Configuration
+Language: Select target language (e.g., Spanish)
+Slicing method: Amelia pipe
+Batch size: 16
+Model: Large whisper v3
+UVR separation: Enable (unless audio already perfectly separated - turning off improves quality and speed)
+Miller whisper threads: 8
+Naming: File hash naming
+Keep processed files: Off (saves disk space)
+Max segment length: 60
+Start transcription when ready
+HuggingFace Setup
+Create HuggingFace account
+Access PI anote speaker diarization community 1 model (gated - request access)
+Create read access token
+Navigate to Amelia/config.yaml
+Paste token into configuration file
+Rename to config
+Processing Notes
+Models will download during first run
+Output goes to datasets/[project_name]/Spanish_Amelia_dataset
+Can take significant time depending on dataset size
+Index TTS Installation
+Repository Setup
+Clone training GitHub repository
+Open cmd in repository folder
+Run: git fetch (get all branches)
+Run: git checkout training_v2 (switch to training branch)
+Flash Attention Wheel
+Download flash attention wheel from HuggingFace repository
+Place in Index TTS root directory
+Rename to exact name specified (ensure .whl extension, not .whl.wheel)
+Run: UV sync
+Model Downloads
+Run: uv run hf download command
+Downloads to checkpoints folder
+Verify: GPT.pt (~3GB), BP model (~465KB)
+Tokenizer Extension
+Move Dataset
+Cut/move Amelia dataset from dataset-maker to Index TTS
+Create datasets folder in Index TTS root
+Paste dataset there
+Extend BPE Tokenizer
+Edit extend_bpe.bat file
+Set dataset path: datasets/Spanish_Amelia_dataset/[file.jsonl]
+Target size: 24,000 tokens (double original 12,000)
+Character coverage: 100%
+Run script
+Output: Appends 12,000 new tokens
+Creates extended_bp.model and vocab file in checkpoints
+Data Pre-processing
+Edit Preprocess.bat
+Manifests: Point to dataset JSON L file path
+Output directory: Spanish_processed_data (or custom name)
+Tokenizer: checkpoints/extended_bp.model
+Configuration: config_finetune.yaml
+GPT checkpoint: checkpoints/gpt.pt
+Language: ES (use 2-digit language code)
+Device: CUDA for Nvidia
+Batch size: 1
+Workers: 1
+Number of processes: 1
+Skip existing: Enable
+Validation ratio: Default
+Processing Time
+Processes ~10 samples/second
+Large datasets (6,000 hours) can take ~2 days
+Additional models download during process
+Training Data Preparation
+Pair JSONL Script
+Edit pair_jsonl.bat
+Point to Spanish_processed_data directory
+Set: 2 pairs per target (increases data)
+Run script
+Creates: GPT_pairs_train.jsonl file
+Training Configuration (train.bat)
+Delete extra manifest lines (keep 1 train, 1 val manifest)
+Train manifest: datasets/Spanish_processed_data/GPT_pairs_train.jsonl
+Val manifest: datasets/Spanish_processed_data/GPT_pairs_val.jsonl
+Tokenizer: checkpoints/extended_bpe.model
+Configuration: Leave default
+Base checkpoint: checkpoints/gpt.pt
+Output directory: train_checkpoints_Spanish2 (custom name)
+Batch size: Based on VRAM
+1 batch = ~4GB VRAM
+12GB GPU = 2 batch size
+16GB GPU = 3 batch size
+24GB GPU = 4-6 batch size
+Gradient accumulation: 1
+Epochs: 2 (number of training passes)
+Validation interval: 1000 (for faster validation)
+Command Line Syntax
+CMD: Use up arrows/carets (^)
+PowerShell: Use back ticks (`)
+Copy and paste command to start training
+Training Duration
+Extremely time-consuming
+Depends on GPU and dataset size
+Monitor terminal for progress
+Monitoring Training Progress
+TensorBoard
+Run: uv run tensorboard --logdir train_checkpoints_Spanish
+Access: localhost:6006
+Smoothing: Set to maximum for trend visibility
+Key Metrics to Monitor
+Loss: Should decrease and flatten
+Meltop: Should increase
+Text loss: Should decrease to ~1.5
+Check both training and validation graphs
+Checkpoint Management
+Only last 3 epochs saved automatically (each ~7GB)
+Manually save earlier checkpoints if needed
+Model Pruning
+After Training
+Edit prune_model.bat
+Input directory: Point to trained model (e.g., Spanish/39002.pth)
+Output name: Spanish_39k (or custom)
+Run script
+Removes training keys, keeps only inference weights
+Output: models folder in root
+Testing the Model
+Launch Web UI
+Run: uv run web_ui_parallel.py
+Access: localhost:7862
+Interface Setup
+Select trained Spanish model
+Select extended_bpe.model tokenizer
+Click "Load models"
+Terminal shows parameter reshaping
+Confirm "models loaded successfully"
+Generation
+Input text (can use sentences from val manifest.jsonl)
+Enable "Match prompt audio"
+Click "Generate"
+Monitor terminal for progress
+Listen to output
+Settings
+Seed: Controls determinism
+Same seed = same output
+Change seed (1,2,3,4,5...) for different styles
+Temperature: Controls randomness (leave default)
+Target duration: Experimental, not officially supported
+Resuming Training
+To Resume from Checkpoint
+Edit train.bat
+Base checkpoint: Point to previous trained model path (e.g., train_checkpoints_Spanish/38000.pth)
+Add: --resume auto
+Run training script
+Training continues from that checkpoint
+To Restart from Scratch
+Set base checkpoint to previous model
+Remove --resume auto flag
+Training starts over with pre-trained weights
+Additional Notes
+Pipeline still under investigation, not fully complete
+Many aspects require experimentation
+Spanish model available to channel members
+Includes both tokenizer and trained model
