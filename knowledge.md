@@ -98,6 +98,39 @@ To add support for a new language, follow the pattern established for Amharic:
 
 ## Training Pipeline
 
+### CRITICAL: Extended Vocabulary Training Fix
+
+**Problem:** When using extended tokenizers (e.g., Amharic 24k tokens vs base 12k), new tokens (12000-23999) are randomly initialized but base model only has pretrained embeddings for 0-11999. This causes:
+- High loss values (mel_loss=4.5-4.8, text_loss=4.5) that plateau
+- Model produces nonsense speech for new language
+- Training appears stuck after ~10k steps
+
+**Root Cause:** In `build_model()`, only first 12k embedding weights are copied from checkpoint. New language tokens 12000-23999 remain randomly initialized, causing model to see random noise for all new language text.
+
+**Fix Applied:** `trainers/train_gpt_v2.py` now automatically:
+1. Detects extended vocabularies (vocab_size > 12000)
+2. Freezes base token embeddings (0-11999) via gradient hooks
+3. Allows only new tokens (12000+) to train
+4. Prints diagnostic info on startup
+
+**Expected Results After Fix:**
+- Loss should drop steadily (not plateau)
+- Within 10k steps: text_loss ~2.5-3.0, mel_loss ~3.0-3.5
+- At 30k steps: text_loss ~1.8-2.2, mel_loss ~2.0-2.5
+- Intelligible speech from new language
+
+**Recommended Settings for Extended Vocab:**
+```bash
+python trainers/train_gpt_v2.py \
+  --learning-rate 5e-6 \              # Lower LR for stability
+  --text-loss-weight 0.4 \            # Higher text weight
+  --mel-loss-weight 0.6 \
+  --warmup-steps 2000 \               # Longer warmup
+  # ... other args
+```
+
+**See `AMHARIC_TRAINING_FIX.md` for complete analysis and diagnostics.**
+
 ### Resume Training
 
 **Feature:** Automatically resume interrupted training from checkpoints

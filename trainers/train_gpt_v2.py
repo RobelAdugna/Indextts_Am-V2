@@ -697,6 +697,48 @@ def main() -> None:
     tokenizer = load_tokenizer(args.tokenizer)
     model = build_model(args.config, tokenizer, args.base_checkpoint, device)
     
+    # === AMHARIC FINE-TUNING FIX ===
+    # Fix for extended vocabularies (e.g., Amharic with 24k tokens vs base 12k)
+    base_vocab_size = 12000  # Base English/Chinese vocabulary size
+    current_vocab_size = tokenizer.vocab_size
+    
+    if current_vocab_size > base_vocab_size:
+        print(f"\n{'='*80}")
+        print(f"[Extended Vocab Fix] Detected extended vocabulary: {current_vocab_size} tokens")
+        print(f"[Extended Vocab Fix] Base tokens: 0-{base_vocab_size-1} (pretrained)")
+        print(f"[Extended Vocab Fix] New tokens: {base_vocab_size}-{current_vocab_size-1} (random init)")
+        print(f"[Extended Vocab Fix] Applying gradient masking to freeze base embeddings")
+        print(f"{'='*80}\n")
+        
+        # Gradient hook to freeze base token embeddings during training
+        # This ensures only new language tokens (e.g., Amharic 12000-23999) are trained
+        def freeze_base_tokens_hook(grad):
+            """Zero out gradients for base vocabulary tokens (0-11999)"""
+            if grad is None:
+                return None
+            # Defensive: ensure we don't index out of bounds
+            if grad.shape[0] <= base_vocab_size:
+                return grad  # No extended vocab, nothing to freeze
+            grad_clone = grad.clone()
+            grad_clone[:base_vocab_size] = 0  # Freeze base tokens
+            return grad_clone
+        
+        # Register hooks on text embedding layers
+        model.text_embedding.weight.register_hook(freeze_base_tokens_hook)
+        model.text_head.weight.register_hook(freeze_base_tokens_hook)
+        model.text_head.bias.register_hook(freeze_base_tokens_hook)
+        
+        # Calculate frozen parameters
+        frozen_params = base_vocab_size * model.model_dim * 2  # embedding + head weights
+        frozen_params += base_vocab_size  # head bias
+        total_params = sum(p.numel() for p in model.parameters())
+        frozen_pct = (frozen_params / total_params) * 100
+        
+        print(f"[Extended Vocab Fix] Gradient hooks registered for selective training")
+        print(f"[Extended Vocab Fix] Freezing {frozen_params:,} / {total_params:,} parameters ({frozen_pct:.1f}%)")
+        print(f"[Extended Vocab Fix] Base embeddings frozen, new embeddings trainable\n")
+    # === END FIX ===
+    
     # Enable gradient checkpointing if requested (saves VRAM)
     if args.grad_checkpointing and hasattr(model, 'gpt'):
         try:
