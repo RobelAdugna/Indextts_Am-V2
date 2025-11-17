@@ -713,37 +713,6 @@ def main() -> None:
     # to ensure they apply to the loaded weights
     base_vocab_size = 12000  # Base English/Chinese vocabulary size
     current_vocab_size = tokenizer.vocab_size
-        print(f"\n{'='*80}")
-        print(f"[Extended Vocab Fix] Detected extended vocabulary: {current_vocab_size} tokens")
-        print(f"[Extended Vocab Fix] Base tokens: 0-{base_vocab_size-1} (pretrained)")
-        print(f"[Extended Vocab Fix] New tokens: {base_vocab_size}-{current_vocab_size-1} (random init)")
-        print(f"[Extended Vocab Fix] Applying gradient masking to freeze base embeddings")
-        print(f"{'='*80}\n")
-        
-        # Gradient hook to freeze base token embeddings during training
-        # This ensures only new language tokens (e.g., Amharic 12000-23999) are trained
-        def freeze_base_tokens_hook(grad):
-            """Zero out gradients for base vocabulary tokens (0-11999)"""
-            if grad is None:
-                return None
-            # Defensive: ensure we don't index out of bounds
-            if grad.shape[0] <= base_vocab_size:
-                return grad  # No extended vocab, nothing to freeze
-            grad_clone = grad.clone()
-            grad_clone[:base_vocab_size] = 0  # Freeze base tokens
-            return grad_clone
-        
-        # Register hooks on text embedding layers
-        model.text_embedding.weight.register_hook(freeze_base_tokens_hook)
-        model.text_head.weight.register_hook(freeze_base_tokens_hook)
-        model.text_head.bias.register_hook(freeze_base_tokens_hook)
-        
-        # Calculate frozen parameters
-        frozen_params = base_vocab_size * model.model_dim * 2  # embedding + head weights
-        frozen_params += base_vocab_size  # head bias
-        total_params = sum(p.numel() for p in model.parameters())
-        frozen_pct = (frozen_params / total_params) * 100
-        
     
     def apply_extended_vocab_fix():
         """Apply gradient hooks for extended vocabulary training."""
