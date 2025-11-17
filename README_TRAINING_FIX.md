@@ -154,6 +154,17 @@ Your implementation was excellent from the start. This one bug was the only obst
 
 ## 📚 Additional Resources
 
+**Training Documentation:**
+- **Complete Resume Guide:** `COMPLETE_RESUME_TRAINING_GUIDE.md` ⭐
+- **Resume Quick Reference:** `RESUME_QUICK_REFERENCE.md`
+- **Resume Technical Details:** `RESUME_TRAINING_WITH_FIX.md`
+
+**Scripts:**
+- **Smart Wrapper:** `smart_train_amharic.py` - Auto-resumes if checkpoint exists
+- **Fresh Start:** `scripts/start_fresh_amharic_training.sh`
+- **Resume:** `scripts/resume_amharic_training.sh`
+
+**Other Guides:**
 - **Amharic WebUI Guide:** `README_AMHARIC_WEBUI.md`
 - **Setup Guide:** `SETUP_GUIDE.md`
 - **Hardware Optimization:** `HARDWARE_AUTO_OPTIMIZATION.md`
@@ -162,5 +173,5 @@ Your implementation was excellent from the start. This one bug was the only obst
 ---
 
 **Last Updated:** 2025-01
-**Status:** Fix applied, ready for testing
+**Status:** Fix applied, resume training fully documented
 **Confidence:** 100% this solves the training failure

@@ -183,6 +183,18 @@ python trainers/train_gpt_v2.py \
 - If incompatible checkpoint, ensure same tokenizer/config
 - If OOM after resume, reduce `--batch-size`
 
+**CRITICAL for Extended Vocabularies (Amharic, Korean, Arabic, etc.):**
+- ✅ Resume works with gradient hook fix (hooks re-register automatically)
+- ❌ **Don't resume from pre-fix checkpoints** - optimizer state is corrupted from training with random embeddings
+- ✅ **Start fresh after applying fix** - much faster to good results
+- ✅ **Future resumes work perfectly** - once trained with fix, resume is seamless
+- See `RESUME_TRAINING_WITH_FIX.md` for detailed explanation
+
+**Epoch Tracking on Resume (FIXED 2025-01):**
+- Bug: Epoch incremented on every resume, causing epoch number to be incorrect
+- Fix: Checkpoint now saves current epoch (not next). On resume, if mid-epoch (batch_idx > 0) continues same epoch, if epoch completed (batch_idx = 0) starts next epoch
+- Result: Epoch counter stays accurate across resumes
+
 ### Standard Workflow
 
 1. **Data Collection**

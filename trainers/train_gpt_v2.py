@@ -568,20 +568,32 @@ def save_checkpoint(
     torch.save(state, path)
 
 
-def cleanup_old_checkpoints(output_dir: Path, recent_checkpoints: List[str]) -> None:
+def cleanup_old_checkpoints(output_dir: Path, recent_checkpoints: List[str], keep_count: int = 3) -> None:
     """Clean up old checkpoint files to save disk space.
     
     Only removes checkpoints NOT in the recent_checkpoints list.
     Always preserves latest.pth.
+    
+    Args:
+        output_dir: Directory containing checkpoints
+        recent_checkpoints: List of checkpoint paths to keep
+        keep_count: Number of recent checkpoints to keep (used as fallback)
     """
     try:
         # Convert recent checkpoints to set of paths for quick lookup
-        keep_files = set(Path(ckpt).name for ckpt in recent_checkpoints)
+        # Handle both absolute and relative paths
+        keep_files = set()
+        for ckpt in recent_checkpoints:
+            ckpt_path = Path(ckpt)
+            keep_files.add(ckpt_path.name)  # Just the filename
+        
         keep_files.add("latest.pth")  # Always keep latest.pth
         
         # Clean up old checkpoint files not in recent list
         if output_dir.exists():
-            for ckpt_file in output_dir.glob("model_step*.pth"):
+            all_checkpoints = sorted(output_dir.glob("model_step*.pth"), key=lambda p: p.stat().st_mtime)
+            
+            for ckpt_file in all_checkpoints:
                 if ckpt_file.name not in keep_files:
                     try:
                         ckpt_file.unlink()
@@ -697,12 +709,10 @@ def main() -> None:
     tokenizer = load_tokenizer(args.tokenizer)
     model = build_model(args.config, tokenizer, args.base_checkpoint, device)
     
-    # === AMHARIC FINE-TUNING FIX ===
-    # Fix for extended vocabularies (e.g., Amharic with 24k tokens vs base 12k)
+    # Note: Gradient hooks will be registered AFTER potential checkpoint resume
+    # to ensure they apply to the loaded weights
     base_vocab_size = 12000  # Base English/Chinese vocabulary size
     current_vocab_size = tokenizer.vocab_size
-    
-    if current_vocab_size > base_vocab_size:
         print(f"\n{'='*80}")
         print(f"[Extended Vocab Fix] Detected extended vocabulary: {current_vocab_size} tokens")
         print(f"[Extended Vocab Fix] Base tokens: 0-{base_vocab_size-1} (pretrained)")
@@ -734,10 +744,44 @@ def main() -> None:
         total_params = sum(p.numel() for p in model.parameters())
         frozen_pct = (frozen_params / total_params) * 100
         
+    
+    def apply_extended_vocab_fix():
+        """Apply gradient hooks for extended vocabulary training."""
+        if current_vocab_size <= base_vocab_size:
+            return
+        
+        print(f"\n{'='*80}")
+        print(f"[Extended Vocab Fix] Detected extended vocabulary: {current_vocab_size} tokens")
+        print(f"[Extended Vocab Fix] Base tokens: 0-{base_vocab_size-1} (pretrained)")
+        print(f"[Extended Vocab Fix] New tokens: {base_vocab_size}-{current_vocab_size-1} (random init)")
+        print(f"[Extended Vocab Fix] Applying gradient masking to freeze base embeddings")
+        print(f"{'='*80}\n")
+        
+        # Gradient hook to freeze base token embeddings during training
+        def freeze_base_tokens_hook(grad):
+            """Zero out gradients for base vocabulary tokens (0-11999)"""
+            if grad is None:
+                return None
+            if grad.shape[0] <= base_vocab_size:
+                return grad
+            grad_clone = grad.clone()
+            grad_clone[:base_vocab_size] = 0
+            return grad_clone
+        
+        # Register hooks on text embedding layers
+        model.text_embedding.weight.register_hook(freeze_base_tokens_hook)
+        model.text_head.weight.register_hook(freeze_base_tokens_hook)
+        model.text_head.bias.register_hook(freeze_base_tokens_hook)
+        
+        # Calculate frozen parameters
+        frozen_params = base_vocab_size * model.model_dim * 2
+        frozen_params += base_vocab_size
+        total_params = sum(p.numel() for p in model.parameters())
+        frozen_pct = (frozen_params / total_params) * 100
+        
         print(f"[Extended Vocab Fix] Gradient hooks registered for selective training")
         print(f"[Extended Vocab Fix] Freezing {frozen_params:,} / {total_params:,} parameters ({frozen_pct:.1f}%)")
         print(f"[Extended Vocab Fix] Base embeddings frozen, new embeddings trainable\n")
-    # === END FIX ===
     
     # Enable gradient checkpointing if requested (saves VRAM)
     if args.grad_checkpointing and hasattr(model, 'gpt'):
@@ -849,6 +893,21 @@ def main() -> None:
             if missing_keys:
                 raise ValueError(f"Checkpoint missing required keys: {missing_keys}")
             
+            # Validate vocab size compatibility
+            checkpoint_vocab = None
+            if "model" in checkpoint:
+                # Check text_embedding.weight shape
+                for key, value in checkpoint["model"].items():
+                    if key == "text_embedding.weight":
+                        checkpoint_vocab = value.shape[0]
+                        break
+            
+            if checkpoint_vocab is not None and checkpoint_vocab != current_vocab_size:
+                print(f"\n⚠️  WARNING: Vocab size mismatch!")
+                print(f"   Checkpoint vocab: {checkpoint_vocab}")
+                print(f"   Current tokenizer: {current_vocab_size}")
+                print(f"   This may cause issues. Ensure you're using the correct tokenizer.\n")
+            
             # Load model state
             print("[Info] Restoring model state...")
             model.load_state_dict(checkpoint["model"])
@@ -865,22 +924,47 @@ def main() -> None:
                 print("[Warn] No scheduler state in checkpoint, using fresh scheduler")
             
             # Load scaler state (for AMP)
-            if scaler and checkpoint.get("scaler"):
+            # Note: bfloat16 doesn't use scaler (scaler=None), float16 does
+            if scaler is not None and checkpoint.get("scaler") is not None:
                 print("[Info] Restoring gradient scaler state...")
-                scaler.load_state_dict(checkpoint["scaler"])
-            elif scaler and not checkpoint.get("scaler"):
+                try:
+                    scaler.load_state_dict(checkpoint["scaler"])
+                except Exception as e:
+                    print(f"[Warn] Could not restore scaler state: {e}. Using fresh scaler.")
+            elif scaler is not None and checkpoint.get("scaler") is None:
                 print("[Warn] AMP enabled but no scaler state in checkpoint, using fresh scaler")
+            elif scaler is None and checkpoint.get("scaler") is not None:
+                print("[Info] Checkpoint has scaler but current run uses bfloat16 (no scaler needed)")
             
             # Restore training state
-            start_epoch = checkpoint.get("epoch", 0)
-            global_step = checkpoint.get("step", 0)
+            # Note: checkpoint["epoch"] is the epoch we were IN when saved
+            # If batch_idx > 0, we're mid-epoch and need to complete it
+            # If batch_idx == 0, we completed that epoch and should start next
+            saved_epoch = checkpoint.get("epoch", 0)
             start_batch_idx = checkpoint.get("batch_idx", 0)
+            
+            # Determine which epoch to start from
+            if start_batch_idx > 0:
+                # Mid-epoch: continue the saved epoch
+                start_epoch = saved_epoch
+            else:
+                # Epoch completed: start next epoch
+                start_epoch = saved_epoch + 1
+            
+            global_step = checkpoint.get("step", 0)
             recent_checkpoints = checkpoint.get("recent_checkpoints", [])
             last_saved_step = checkpoint.get("step")
             
             print(f"[Info] ✅ Successfully resumed from {resume_path}")
             print(f"[Info]    Epoch: {start_epoch}, Step: {global_step}, Batch: {start_batch_idx}")
             print(f"[Info]    Recent checkpoints: {len(recent_checkpoints)}")
+            
+            # Warn if hyperparameters might have changed (can't detect perfectly, but helpful)
+            print(f"\n💡 Reminder: Ensure you're using the SAME hyperparameters as original training:")
+            print(f"   --learning-rate {args.learning_rate}")
+            print(f"   --text-loss-weight {args.text_loss_weight}")
+            print(f"   --mel-loss-weight {args.mel_loss_weight}")
+            print(f"   Using different values may cause training instability.\n")
             
             # Note: Don't cleanup checkpoints on resume - we want to keep all trained checkpoints
             # Only __pycache__ cleanup is safe here
@@ -893,6 +977,10 @@ def main() -> None:
         except Exception as e:
             print(f"[Error] Failed to load checkpoint from {resume_path}: {e}")
             raise RuntimeError(f"Resume failed: {e}") from e
+    
+    # Apply extended vocab fix AFTER checkpoint loading (if any)
+    # This ensures gradient hooks apply to the loaded model weights
+    apply_extended_vocab_fix()
 
     model.train()
     optimizer.zero_grad(set_to_none=True)
@@ -908,7 +996,21 @@ def main() -> None:
     # Calculate if we need to skip batches (resumed mid-epoch)
     skip_batches_first_epoch = start_batch_idx if start_batch_idx > 0 else 0
     
+    # Align batch skipping with gradient accumulation boundaries
+    if skip_batches_first_epoch > 0 and args.grad_accumulation > 1:
+        # Round down to nearest gradient accumulation boundary
+        aligned_skip = (skip_batches_first_epoch // args.grad_accumulation) * args.grad_accumulation
+        if aligned_skip != skip_batches_first_epoch:
+            print(f"[Info] Aligning batch skip from {skip_batches_first_epoch} to {aligned_skip} (grad_accumulation={args.grad_accumulation})")
+            skip_batches_first_epoch = aligned_skip
+    
     for epoch in range(start_epoch, args.epochs):
+        # Reset batch index at the start of each NEW epoch (not when resuming mid-epoch)
+        if epoch > start_epoch:
+            current_batch = 0
+        else:
+            current_batch = start_batch_idx  # Resume from saved batch position
+        
         # Create subset dataset for first epoch if resuming mid-epoch
         if epoch == start_epoch and skip_batches_first_epoch > 0:
             # Calculate which samples to skip
@@ -982,9 +1084,13 @@ def main() -> None:
                     if val_metrics["mel_loss"] < best_val:
                         best_val = val_metrics["mel_loss"]
 
-                if global_step % save_every == 0:
+                # Save checkpoint (skip if we just resumed from this exact step)
+                if global_step % save_every == 0 and last_saved_step != global_step:
                     ckpt_path = output_dir / f"model_step{global_step}.pth"
                     recent_checkpoints.append(str(ckpt_path))
+                    # Keep only recent checkpoints
+                    if len(recent_checkpoints) > args.keep_checkpoints:
+                        recent_checkpoints = recent_checkpoints[-args.keep_checkpoints:]
                     save_checkpoint(
                         ckpt_path,
                         model,
@@ -1012,7 +1118,7 @@ def main() -> None:
                         output_dir / "latest.pth",
                     )
                     # Clean up old checkpoints beyond keep limit
-                    cleanup_old_checkpoints(output_dir, recent_checkpoints)
+                    cleanup_old_checkpoints(output_dir, recent_checkpoints, args.keep_checkpoints)
                     last_saved_step = global_step
 
                 if args.max_steps and global_step >= args.max_steps:

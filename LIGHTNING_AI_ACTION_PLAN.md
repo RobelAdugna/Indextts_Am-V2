@@ -60,7 +60,17 @@ python verify_amharic_training.py \
 
 ### Step 4: Start Fresh Training (CRITICAL)
 
-**DO NOT resume from your old checkpoint!** Start fresh:
+**DO NOT resume from your old checkpoint at step 38k!**
+
+**Why not resume?**
+- Old checkpoint has corrupted optimizer state from 38k steps of broken training
+- Amharic embeddings are in bad state (trained without gradient masking)
+- Would need 60k+ total steps vs 25k fresh
+- **Starting fresh is 2.7x faster to good results!**
+
+**Resume IS compatible with the fix** (hooks re-register automatically), but your specific old checkpoint is corrupted. See `RESUME_TRAINING_WITH_FIX.md` for technical details.
+
+**Start fresh:**
 
 ```bash
 # Stop any existing training first

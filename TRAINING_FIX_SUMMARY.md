@@ -16,6 +16,19 @@ Modified `trainers/train_gpt_v2.py` to:
 - ✅ Train only new Amharic tokens (12000-23999)
 - ✅ Show diagnostic info on startup
 
+## Resume Training Compatibility
+
+**✅ YES, resume works with the fix!**
+
+Gradient hooks re-register automatically on every training run.
+
+**BUT for your specific case (38k broken steps):**
+- ❌ **Don't resume from old checkpoint** - optimizer state is corrupted
+- ✅ **Start fresh** - faster to good results (25k steps vs 60k+ resumed)
+- ✅ **Future resumes** - once trained with fix, resume works perfectly
+
+**See `RESUME_TRAINING_WITH_FIX.md` for complete explanation.**
+
 ## What You Need To Do
 
 ### Step 1: Verify Setup
