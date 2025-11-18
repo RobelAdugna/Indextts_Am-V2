@@ -1153,23 +1153,44 @@ def start_training(
     
     # Start training in background
     try:
+        # Log the command being executed
+        cmd_str = ' '.join(str(c) for c in cmd)
+        print(f"\n[Training Command]\n{cmd_str}\n")
+        
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1
         )
         
+        # Wait briefly to check if process starts successfully
+        import time
+        time.sleep(2)
+        
+        # Check if process is still running
+        poll_result = process.poll()
+        
+        if poll_result is not None:
+            # Process already exited - something went wrong
+            stdout, stderr = process.communicate(timeout=5)
+            error_msg = f"Training failed to start!\n\nExit code: {poll_result}\n\nOutput:\n{stdout}\n\nErrors:\n{stderr}"
+            return format_status_html(f"❌ {error_msg}", False), ""
+        
+        # Process is running successfully
         status_html = format_status_html(
-            f"✅ Training started (PID: {process.pid})\nCheck terminal for progress or use TensorBoard"
+            f"✅ Training started successfully!\n\nProcess ID: {process.pid}\n\nCommand:\n{cmd_str}\n\nCheck terminal for live progress or use TensorBoard below."
         )
         
-        tensorboard_cmd = f"tensorboard --logdir {output_dir}"
+        tensorboard_cmd = f"tensorboard --logdir {output_dir}\n\nOr in browser: http://localhost:6006"
         
-        return status_html, f"To monitor training:\n{tensorboard_cmd}"
+        return status_html, f"**Monitor Training:**\n\n```bash\n{tensorboard_cmd}\n```"
     
     except Exception as e:
-        return format_status_html(f"❌ Error: {str(e)}", False), ""
+        import traceback
+        error_details = traceback.format_exc()
+        return format_status_html(f"❌ Error starting training:\n\n{str(e)}\n\nDetails:\n{error_details}", False), ""
 
 
 # ============================================================================
