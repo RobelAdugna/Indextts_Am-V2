@@ -1865,6 +1865,16 @@ def create_ui():
                         label="Validation Pairs Manifest",
                         placeholder="Will auto-fill from pairing step (use val_pairs.jsonl!)"
                     )
+                    
+                    # Auto-fill manifests from pipeline state
+                    state.change(
+                        lambda s: (
+                            s.get("train_pairs", ""),
+                            s.get("val_pairs", "")
+                        ),
+                        inputs=[state],
+                        outputs=[train_manifest_path, val_manifest_path]
+                    )
                     train_output_dir = gr.Textbox(
                         label="Output Directory",
                         value="training_output"
@@ -1873,6 +1883,13 @@ def create_ui():
                     train_tokenizer = gr.Textbox(
                         label="Tokenizer Path",
                         placeholder="Will auto-fill from tokenizer step"
+                    )
+                    
+                    # Auto-fill tokenizer from pipeline state
+                    state.change(
+                        lambda s: s.get("tokenizer_model", ""),
+                        inputs=[state],
+                        outputs=[train_tokenizer]
                     )
                     
                     with gr.Row():
@@ -1962,17 +1979,6 @@ def create_ui():
                         - ✅ Weight decay 1e-5 (regularization)
                         - ✅ Loss weights: text=0.3, mel=0.7
                         """)
-            
-            # Auto-fill from pairs and tokenizer
-            state.change(
-                lambda s: (
-                    s.get("train_pairs", ""),
-                    s.get("val_pairs", ""),
-                    s.get("tokenizer_model", "")
-                ),
-                inputs=[state],
-                outputs=[train_manifest_path, val_manifest_path, train_tokenizer]
-            )
             
             # Preset button handlers
             preset_balanced.click(
