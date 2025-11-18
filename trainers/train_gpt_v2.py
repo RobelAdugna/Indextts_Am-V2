@@ -75,7 +75,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup-steps", type=int, default=1000, help="LR warmup steps.")
     parser.add_argument("--max-steps", type=int, default=0, help="Optional max optimiser steps (0 = unlimited).")
     parser.add_argument("--log-interval", type=int, default=100, help="Steps between training log entries.")
-    parser.add_argument("--val-interval", type=int, default=1000, help="Validation frequency in steps (0 = once per epoch).")
+    parser.add_argument("--val-interval", type=int, default=1000, help="Validation frequency in steps (0 = once per epoch). Video recommends 1000 for faster validation.")
     parser.add_argument("--num-workers", type=int, default=0, help="DataLoader workers (0=auto-detect based on CPU count).")
     parser.add_argument("--grad-clip", type=float, default=1.0, help="Gradient norm clipping value.")
     parser.add_argument("--text-loss-weight", type=float, default=0.2, help="Weight for text CE loss.")
@@ -83,8 +83,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--amp", action="store_true", help="Enable CUDA AMP (bfloat16 on L4).")
     parser.add_argument("--grad-checkpointing", action="store_true", help="Enable gradient checkpointing to save VRAM (slower but allows larger batches).")
     parser.add_argument("--resume", type=str, default="", help="Path to checkpoint to resume from, or 'auto'.")
-    parser.add_argument("--save-interval", type=int, default=1000, help="Checkpoint save frequency in optimizer steps.")
-    parser.add_argument("--keep-checkpoints", type=int, default=2, help="Number of recent checkpoints to keep (older ones are deleted).")
+    parser.add_argument("--save-interval", type=int, default=1000, help="Checkpoint save frequency in optimizer steps. Video uses 1000 steps.")
+    parser.add_argument("--keep-checkpoints", type=int, default=3, help="Number of recent checkpoints to keep (older ones are deleted). Video keeps last 3 epochs.")
     parser.add_argument("--seed", type=int, default=1234, help="Random seed.")
     return parser.parse_args()
 
@@ -871,26 +871,42 @@ def main() -> None:
                         checkpoint_vocab = value.shape[0]
                         break
             
+            skip_optimizer_load = False
             if checkpoint_vocab is not None and checkpoint_vocab != current_vocab_size:
-                print(f"\n⚠️  WARNING: Vocab size mismatch!")
+                print(f"\n🚨 CRITICAL: Vocab size mismatch detected!")
                 print(f"   Checkpoint vocab: {checkpoint_vocab}")
                 print(f"   Current tokenizer: {current_vocab_size}")
-                print(f"   This may cause issues. Ensure you're using the correct tokenizer.\n")
+                print(f"   Optimizer state is INCOMPATIBLE with current model.")
+                print(f"   ❌ Will NOT load optimizer/scheduler (would prevent learning!)")
+                print(f"   ✅ Will load model weights and continue with fresh optimizer.\n")
+                skip_optimizer_load = True
+            
+            # Validate tokenizer path matches (critical for correct token mappings)
+            checkpoint_tokenizer = checkpoint.get("manifests", {}).get("tokenizer")
+            if checkpoint_tokenizer and str(args.tokenizer) != checkpoint_tokenizer:
+                print(f"\n⚠️  WARNING: Tokenizer path changed!")
+                print(f"   Checkpoint used: {checkpoint_tokenizer}")
+                print(f"   Current: {args.tokenizer}")
+                print(f"   Token mappings may be incorrect if tokenizers differ!\n")
             
             # Load model state
             print("[Info] Restoring model state...")
-            model.load_state_dict(checkpoint["model"])
+            missing, unexpected = model.load_state_dict(checkpoint["model"], strict=False)
+            if missing:
+                print(f"[Warn] Missing keys: {missing[:3]}..." if len(missing) > 3 else f"[Warn] Missing: {missing}")
+            if unexpected:
+                print(f"[Warn] Unexpected keys: {unexpected[:3]}..." if len(unexpected) > 3 else f"[Warn] Unexpected: {unexpected}")
             
-            # Load optimizer state
-            print("[Info] Restoring optimizer state...")
-            optimizer.load_state_dict(checkpoint["optimizer"])
-            
-            # Load scheduler state
-            if checkpoint.get("scheduler"):
+            # Only load optimizer/scheduler if vocab sizes match
+            if not skip_optimizer_load:
+                print("[Info] Restoring optimizer state...")
+                optimizer.load_state_dict(checkpoint["optimizer"])
+                
                 print("[Info] Restoring scheduler state...")
                 scheduler.load_state_dict(checkpoint["scheduler"])
             else:
-                print("[Warn] No scheduler state in checkpoint, using fresh scheduler")
+                print("[Info] Using FRESH optimizer and scheduler (incompatible checkpoint)")
+                print("[Info] Training will take longer to converge, but WILL learn correctly")
             
             # Load scaler state (for AMP)
             # Note: bfloat16 doesn't use scaler (scaler=None), float16 does
@@ -906,19 +922,11 @@ def main() -> None:
                 print("[Info] Checkpoint has scaler but current run uses bfloat16 (no scaler needed)")
             
             # Restore training state
-            # Note: checkpoint["epoch"] is the epoch we were IN when saved
-            # If batch_idx > 0, we're mid-epoch and need to complete it
-            # If batch_idx == 0, we completed that epoch and should start next
-            saved_epoch = checkpoint.get("epoch", 0)
+            # CRITICAL: Proper epoch/batch restoration
+            # Checkpoint saves the NEXT epoch/batch to resume from
+            # This ensures perfect continuity across interruptions
+            start_epoch = checkpoint.get("epoch", 0)
             start_batch_idx = checkpoint.get("batch_idx", 0)
-            
-            # Determine which epoch to start from
-            if start_batch_idx > 0:
-                # Mid-epoch: continue the saved epoch
-                start_epoch = saved_epoch
-            else:
-                # Epoch completed: start next epoch
-                start_epoch = saved_epoch + 1
             
             global_step = checkpoint.get("step", 0)
             recent_checkpoints = checkpoint.get("recent_checkpoints", [])
@@ -1060,16 +1068,25 @@ def main() -> None:
                     # Keep only recent checkpoints
                     if len(recent_checkpoints) > args.keep_checkpoints:
                         recent_checkpoints = recent_checkpoints[-args.keep_checkpoints:]
+                    
+                    # Calculate next position to resume from
+                    next_batch = batch_idx + 1
+                    next_epoch = epoch
+                    # Handle epoch boundary: if next batch exceeds epoch, move to next epoch
+                    if next_batch >= len(train_loader):
+                        next_batch = 0
+                        next_epoch = epoch + 1
+                    
                     save_checkpoint(
                         ckpt_path,
                         model,
                         optimizer,
                         scheduler,
                         scaler,
-                        epoch + 1,  # Save next epoch to start
+                        next_epoch,
                         global_step,
                         recent_checkpoints,
-                        batch_idx + 1,  # Save next batch to start from
+                        next_batch,
                         extra=checkpoint_extra("step"),
                     )
                     torch.save(
@@ -1078,9 +1095,9 @@ def main() -> None:
                             "optimizer": optimizer.state_dict(),
                             "scheduler": scheduler.state_dict(),
                             "scaler": scaler.state_dict() if scaler else None,
-                            "epoch": epoch + 1,  # Save next epoch to start
+                            "epoch": next_epoch,
                             "step": global_step,
-                            "batch_idx": batch_idx + 1,  # Save next batch to start from
+                            "batch_idx": next_batch,
                             "recent_checkpoints": recent_checkpoints,
                             "manifests": manifest_metadata,
                         },
@@ -1122,11 +1139,11 @@ def main() -> None:
             optimizer,
             scheduler,
             scaler,
-            epoch + 1,  # Save next epoch to start
+            args.epochs,  # Completed all epochs
             global_step,
             recent_checkpoints,
-            0,  # Final checkpoint - start from beginning of next epoch
-            extra=checkpoint_extra("step-final"),
+            0,  # Training complete
+            extra=checkpoint_extra("final"),
         )
         torch.save(
             {
@@ -1134,9 +1151,9 @@ def main() -> None:
                 "optimizer": optimizer.state_dict(),
                 "scheduler": scheduler.state_dict(),
                 "scaler": scaler.state_dict() if scaler else None,
-                "epoch": epoch + 1,  # Save next epoch to start
+                "epoch": args.epochs,  # Completed all epochs
                 "step": global_step,
-                "batch_idx": 0,  # Final checkpoint - start from beginning of next epoch
+                "batch_idx": 0,  # Training complete
                 "recent_checkpoints": recent_checkpoints,
                 "manifests": manifest_metadata,
             },

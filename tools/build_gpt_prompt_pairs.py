@@ -177,6 +177,67 @@ def build_pairs(
     return output
 
 
+def validate_pair_distribution(pairs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Analyze and report on pair distribution quality.
+    
+    Returns dictionary with speaker stats, prompt usage, and warnings.
+    """
+    from collections import Counter
+    
+    speaker_counts = Counter()
+    prompt_usage = Counter()
+    target_usage = Counter()
+    
+    for pair in pairs:
+        speaker = pair.get("speaker", "unknown")
+        speaker_counts[speaker] += 1
+        
+        # Track prompt and target utterance IDs
+        prompt_id = pair.get("prompt_id")  # Would need to be added to pair dict
+        target_id = pair.get("id")
+        if prompt_id:
+            prompt_usage[prompt_id] += 1
+        if target_id:
+            target_usage[target_id] += 1
+    
+    stats = {
+        "total_pairs": len(pairs),
+        "unique_speakers": len(speaker_counts),
+        "speaker_distribution": dict(speaker_counts),
+        "pairs_per_speaker": {
+            "min": min(speaker_counts.values()) if speaker_counts else 0,
+            "max": max(speaker_counts.values()) if speaker_counts else 0,
+            "mean": sum(speaker_counts.values()) / len(speaker_counts) if speaker_counts else 0,
+        },
+    }
+    
+    # Detect imbalance
+    if speaker_counts:
+        max_count = max(speaker_counts.values())
+        min_count = min(speaker_counts.values())
+        if max_count > 0 and min_count > 0:
+            imbalance_ratio = max_count / min_count
+            stats["speaker_imbalance_ratio"] = imbalance_ratio
+            
+            # Warn if top speaker dominates
+            top_speaker_pct = max_count / len(pairs) * 100
+            stats["top_speaker_percentage"] = top_speaker_pct
+            
+            if imbalance_ratio > 20:
+                stats["warnings"] = stats.get("warnings", [])
+                stats["warnings"].append(
+                    f"High speaker imbalance: ratio {imbalance_ratio:.1f}x (max={max_count}, min={min_count})"
+                )
+            
+            if top_speaker_pct > 30:
+                stats["warnings"] = stats.get("warnings", [])
+                stats["warnings"].append(
+                    f"Top speaker dominates: {top_speaker_pct:.1f}% of all pairs"
+                )
+    
+    return stats
+
+
 def main() -> None:
     args = parse_args()
     random.seed(args.seed)

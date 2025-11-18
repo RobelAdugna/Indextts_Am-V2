@@ -100,6 +100,33 @@ To add support for a new language, follow the pattern established for Amharic:
 
 ## Training Pipeline
 
+### Dataset Size Considerations
+
+**Your Dataset: 200 hours (Medium-Scale)**
+
+**Key Points:**
+- ✅ Enough data for high quality
+- ⚠️ Overfitting is a real concern (not big data)
+- 🎯 Needs careful regularization and monitoring
+
+**Specific Recommendations:**
+1. **Epochs:** 2-3 (NOT 10!) - prevents memorization
+2. **Validation:** Every 500 steps - catches overfitting early
+3. **Checkpoints:** Keep top 5 - allows best model selection
+4. **Early Stopping:** Stop at 60k-70k steps if val loss plateaus
+5. **Weight Decay:** 1e-5 (L2 regularization active)
+6. **Learning Rate:** 5e-5 (conservative for extended vocab)
+7. **Validation Split:** 3% (~6 hours) for 200hr datasets, minimum 10 samples for reliable metrics
+
+**See `TRAINING_200HR_OPTIMIZATIONS.md` for complete guide!**
+
+**Critical Validations (FIXED 2025-01):**
+- ✅ Base vocab size auto-detected from checkpoint (not hardcoded 12000)
+- ✅ Tokenizer path validated on resume (prevents wrong token mappings)
+- ✅ Val split quality checked (warns if actual != expected)
+- ✅ Pair distribution analyzed (detects speaker imbalance)
+- ✅ Tokenizer extension size verified (warns if target not reached)
+
 ### CRITICAL: Extended Vocabulary Training Fix
 
 **Problem:** When using extended tokenizers (e.g., Amharic 24k tokens vs base 12k), new tokens (12000-23999) are randomly initialized but base model only has pretrained embeddings for 0-11999. This causes:
@@ -122,13 +149,37 @@ To add support for a new language, follow the pattern established for Amharic:
 - Intelligible speech from new language
 
 **Recommended Settings for Extended Vocab:**
+
+**For Small Datasets (<50 hours):**
 ```bash
 python trainers/train_gpt_v2.py \
-  --learning-rate 5e-6 \              # Lower LR for stability
+  --learning-rate 5e-6 \              # Very conservative
   --text-loss-weight 0.4 \            # Higher text weight
   --mel-loss-weight 0.6 \
-  --warmup-steps 2000 \               # Longer warmup
-  # ... other args
+  --warmup-steps 2000 \
+  --epochs 5-10
+```
+
+**For Medium Datasets (50-300 hours):** ✅ **YOUR CASE (200hr)**
+```bash
+python trainers/train_gpt_v2.py \
+  --learning-rate 5e-5 \              # Conservative but effective
+  --text-loss-weight 0.3 \            # Balanced for quality
+  --mel-loss-weight 0.7 \
+  --warmup-steps 4000 \
+  --val-interval 500 \                # Frequent validation
+  --keep-checkpoints 5 \              # More selection options
+  --epochs 2-3                         # Avoid overfitting!
+```
+
+**For Large Datasets (>300 hours):**
+```bash
+python trainers/train_gpt_v2.py \
+  --learning-rate 1e-4 \              # Can go higher
+  --text-loss-weight 0.2 \
+  --mel-loss-weight 0.8 \
+  --warmup-steps 8000 \
+  --epochs 3-5
 ```
 
 **See `AMHARIC_TRAINING_FIX.md` for complete analysis and diagnostics.**
@@ -182,6 +233,7 @@ python trainers/train_gpt_v2.py \
 - If checkpoint not found, check `--output-dir` matches previous run
 - If incompatible checkpoint, ensure same tokenizer/config
 - If OOM after resume, reduce `--batch-size`
+- **CRITICAL: Vocab mismatch breaks training!** If checkpoint has different vocab size than current tokenizer (even 1 token difference), optimizer state becomes incompatible. Symptoms: losses completely stuck, no learning. Fix: Code detects mismatch and skips incompatible optimizer state automatically (uses fresh optimizer but preserves model weights). See `TRAINING_STUCK_FIX_COMPLETE.md` and `VOCAB_MISMATCH_FIX.md` for details.
 
 **CRITICAL for Extended Vocabularies (Amharic, Korean, Arabic, etc.):**
 - ✅ Resume works with gradient hook fix (hooks re-register automatically)
@@ -192,8 +244,9 @@ python trainers/train_gpt_v2.py \
 
 **Epoch Tracking on Resume (FIXED 2025-01):**
 - Bug: Epoch incremented on every resume, causing epoch number to be incorrect
-- Fix: Checkpoint now saves current epoch (not next). On resume, if mid-epoch (batch_idx > 0) continues same epoch, if epoch completed (batch_idx = 0) starts next epoch
-- Result: Epoch counter stays accurate across resumes
+- Fix: Checkpoint saves NEXT epoch/batch to resume from. Handles epoch boundaries correctly (when next_batch >= len(loader), increments epoch and resets batch to 0)
+- Video Best Practice: Keep last 3 checkpoints (every 1000 steps), validate every 1000 steps
+- Result: Bulletproof continuity - interrupt/resume works perfectly at any point (mid-epoch or epoch boundary)
 
 ### Standard Workflow
 
@@ -874,9 +927,10 @@ python tools/create_amharic_dataset.py \
 - `training_v2` - current development
 - Feature branches for major changes
 
-## BPE Tokenizer Extension (Video Workflow)
+## BPE Tokenizer Extension (Video Workflow - CRITICAL!)
 
 **Source:** IndexTTS2 video at timestamp 20:05-30:00
+**Status:** ✓ Implemented correctly in extend_bpe.py
 
 ### Why Extension Not Training?
 

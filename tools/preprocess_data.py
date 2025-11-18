@@ -758,6 +758,28 @@ def preprocess_dataset(
         tokenizer_path,
         args.gpt_checkpoint,
     )
+    
+    # Validation split quality check
+    total_samples = len(train_ids) + len(val_ids)
+    if total_samples > 0:
+        actual_val_ratio = len(val_ids) / total_samples
+        expected_val_ratio = args.val_ratio
+        
+        # Warn if actual ratio differs significantly (>20% relative error)
+        if abs(actual_val_ratio - expected_val_ratio) > (expected_val_ratio * 0.2):
+            print(f"\n⚠️  Validation split warning:")
+            print(f"   Expected: {expected_val_ratio:.1%} ({int(total_samples * expected_val_ratio)} samples)")
+            print(f"   Actual: {actual_val_ratio:.1%} ({len(val_ids)} samples)")
+            print(f"   Difference: {abs(actual_val_ratio - expected_val_ratio):.1%}")
+            if total_samples < 500:
+                print(f"   Note: Small datasets (<500 samples) have higher split variance due to hash-based assignment.")
+            print()
+        
+        # Warn if validation set too small for reliable metrics
+        if len(val_ids) < 10:
+            print(f"\n⚠️  Very small validation set: {len(val_ids)} samples")
+            print(f"   Recommendation: Use at least 10 validation samples for reliable metrics.")
+            print(f"   Consider increasing --val-ratio or collecting more data.\n")
 
     print(
         f"[{dataset_language}] processed={processed} skipped={skipped} "
