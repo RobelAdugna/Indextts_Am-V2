@@ -1880,7 +1880,7 @@ def create_ui():
                         value="training_output"
                     )
                     
-                    train_tokenizer = gr.Textbox(
+                    train_tokenizer_path = gr.Textbox(
                         label="Tokenizer Path",
                         placeholder="Will auto-fill from tokenizer step"
                     )
@@ -1889,7 +1889,7 @@ def create_ui():
                     state.change(
                         lambda s: s.get("tokenizer_model", ""),
                         inputs=[state],
-                        outputs=[train_tokenizer]
+                        outputs=[train_tokenizer_path]
                     )
                     
                     with gr.Row():
@@ -1997,7 +1997,7 @@ def create_ui():
             start_training_btn.click(
                 start_training,
                 inputs=[
-                    train_manifest_path, val_manifest_path, train_tokenizer, train_output_dir,
+                    train_manifest_path, val_manifest_path, train_tokenizer_path, train_output_dir,
                     train_config, train_base_checkpoint, train_lr, train_batch, train_epochs,
                     resume_training, resume_checkpoint
                 ],
