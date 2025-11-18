@@ -206,11 +206,17 @@ python trainers/train_gpt_v2.py \
 ```
 
 **WebUI Usage (Tab 6):**
-1. Check "Resume from checkpoint"
-2. Either:
-   - Leave path empty for auto-resume (uses latest.pth)
-   - Enter specific checkpoint path
-3. Click "Start Training"
+1. **Choose preset** (200hr-optimized): Balanced/Conservative/Aggressive
+2. **Or customize:** LR (default 5e-5), Batch (0=auto), Epochs (default 3)
+3. **Resume:** Check box + leave path empty for auto-resume
+4. Click "🚀 Start Training"
+
+**New in WebUI (2025-01):**
+- ✅ 200hr-optimized defaults (3 epochs, LR 5e-5, auto-batch)
+- ✅ Quick presets (Balanced/Conservative/Aggressive)
+- ✅ Integrated optimizations (val_interval=500, keep_ckpts=5, warmup=4k)
+- ✅ Monitoring guide (TensorBoard, expected metrics, stop criteria)
+- ✅ All CLI optimizations auto-injected
 
 **What Gets Restored:**
 - ✅ Model weights

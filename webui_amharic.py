@@ -1117,9 +1117,22 @@ def start_training(
         "--config", config_path,
         "--base-checkpoint", base_checkpoint,
         "--learning-rate", str(learning_rate),
-        "--batch-size", str(batch_size),
         "--epochs", str(epochs),
+        # 200hr dataset optimizations (integrated from video best practices)
+        "--val-interval", "500",  # Catch overfitting early
+        "--save-interval", "1000",  # Checkpoint every 1k steps
+        "--keep-checkpoints", "5",  # Keep top 5 for selection
+        "--warmup-steps", "4000",  # Longer warmup for extended vocab
+        "--weight-decay", "1e-5",  # L2 regularization
+        "--text-loss-weight", "0.3",  # Amharic text accuracy
+        "--mel-loss-weight", "0.7",  # Speech quality
+        "--grad-clip", "1.0",  # Gradient stability
+        "--amp",  # Mixed precision
     ]
+    
+    # Add batch size only if not auto (0 = auto-detect)
+    if batch_size > 0:
+        cmd.extend(["--batch-size", str(batch_size)])
     
     # Add resume flag if enabled
     if resume_training:
@@ -1862,10 +1875,23 @@ def create_ui():
                             value="checkpoints/gpt.pth"
                         )
                     
+                    # Quick presets for 200hr datasets
+                    with gr.Accordion("⚡ Quick Presets (200hr Datasets)", open=True):
+                        gr.Markdown("""
+                        **Choose a preset optimized for 200-hour datasets:**
+                        - 🎯 **Balanced** (recommended): 3 epochs, LR 5e-5, auto-batch
+                        - 🛡️ **Conservative**: 2 epochs, LR 3e-5 (lower overfitting risk)
+                        - 🚀 **Aggressive**: 4 epochs, LR 7e-5 (only if underfitting)
+                        """)
+                        with gr.Row():
+                            preset_balanced = gr.Button("🎯 Balanced", variant="primary")
+                            preset_conservative = gr.Button("🛡️ Conservative")
+                            preset_aggressive = gr.Button("🚀 Aggressive")
+                    
                     with gr.Row():
-                        train_lr = gr.Number(label="Learning Rate", value=1e-5)
-                        train_batch = gr.Slider(label="Batch Size", minimum=1, maximum=32, value=8, step=1)
-                        train_epochs = gr.Slider(label="Epochs", minimum=1, maximum=100, value=10, step=1)
+                        train_lr = gr.Number(label="Learning Rate", value=5e-5, info="200hr dataset: 5e-5 optimal for extended vocab")
+                        train_batch = gr.Slider(label="Batch Size", minimum=0, maximum=64, value=0, step=1, info="0=auto-detect (recommended!)")
+                        train_epochs = gr.Slider(label="Epochs", minimum=1, maximum=20, value=3, step=1, info="200hr dataset: 2-3 prevents overfitting")
                     
                     gr.Markdown("#### Resume Training")
                     resume_training = gr.Checkbox(
@@ -1893,6 +1919,39 @@ def create_ui():
                 with gr.Column():
                     training_status = gr.HTML("Ready to start training")
                     training_info = gr.Textbox(label="Training Info", lines=10)
+                    
+                    # Monitoring guidance for 200hr datasets
+                    with gr.Accordion("📊 Monitor Training Progress", open=False):
+                        gr.Markdown("""
+                        **Start TensorBoard:**
+                        ```bash
+                        uv run tensorboard --logdir trained_ckpts
+                        # Open http://localhost:6006 in browser
+                        ```
+                        
+                        **Healthy Training @ 60k steps (200hr dataset):**
+                        - `train_loss`: 0.8-1.0 ✅
+                        - `val_loss`: 1.0-1.2 ✅
+                        - `gap`: 0.2-0.3 ✅
+                        - `mel_top1`: 0.75-0.80 ✅
+                        
+                        **⚠️ Stop Early If:**
+                        - Val loss flat >10k steps → Use current checkpoint
+                        - Train/val gap >0.5 → Overfitting! Use earlier checkpoint
+                        - Mel_top1 decreasing → Model degrading
+                        
+                        **Expected Timeline (200hr):**
+                        - L4 24GB: 6-9 days (batch=8, auto)
+                        - A100 80GB: 2-3 days (batch=64, auto)
+                        - V100 16GB: 9-12 days (batch=6, auto)
+                        
+                        **Auto-Optimizations Active:**
+                        - ✅ Val every 500 steps (catches overfitting early)
+                        - ✅ Keep 5 checkpoints (best selection)
+                        - ✅ Warmup 4k steps (stability)
+                        - ✅ Weight decay 1e-5 (regularization)
+                        - ✅ Loss weights: text=0.3, mel=0.7
+                        """)
             
             # Auto-fill from pairs
             state.change(
@@ -1902,6 +1961,20 @@ def create_ui():
                 ),
                 inputs=[state],
                 outputs=[train_manifest_path, val_manifest_path]
+            )
+            
+            # Preset button handlers
+            preset_balanced.click(
+                lambda: (5e-5, 0, 3),
+                outputs=[train_lr, train_batch, train_epochs]
+            )
+            preset_conservative.click(
+                lambda: (3e-5, 0, 2),
+                outputs=[train_lr, train_batch, train_epochs]
+            )
+            preset_aggressive.click(
+                lambda: (7e-5, 0, 4),
+                outputs=[train_lr, train_batch, train_epochs]
             )
             
             start_training_btn.click(
