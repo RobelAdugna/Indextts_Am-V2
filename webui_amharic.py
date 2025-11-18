@@ -1069,6 +1069,7 @@ def generate_gpt_pairs(
 def start_training(
     train_manifest: str,
     val_manifest: str,
+    tokenizer_path: str,
     output_dir: str,
     config_path: str,
     base_checkpoint: str,
@@ -1099,6 +1100,9 @@ def start_training(
     if not Path(train_manifest).exists():
         return format_status_html(f"❌ Error: Train manifest not found: {train_manifest}", False), ""
     
+    if not tokenizer_path or not Path(tokenizer_path).exists():
+        return format_status_html(f"❌ Error: Tokenizer not found: {tokenizer_path}\n\nPlease complete Tab 4 (Tokenizer) first!", False), ""
+    
     progress(0.1, desc="Starting training...")
     
     # Build command
@@ -1113,6 +1117,7 @@ def start_training(
         str(script_path),
         "--train-manifest", train_manifest,
         "--val-manifest", val_manifest,
+        "--tokenizer", tokenizer_path,
         "--output-dir", output_dir,
         "--config", config_path,
         "--base-checkpoint", base_checkpoint,
@@ -1865,6 +1870,11 @@ def create_ui():
                         value="training_output"
                     )
                     
+                    train_tokenizer = gr.Textbox(
+                        label="Tokenizer Path",
+                        placeholder="Will auto-fill from tokenizer step"
+                    )
+                    
                     with gr.Row():
                         train_config = gr.Textbox(
                             label="Config Path",
@@ -1953,14 +1963,15 @@ def create_ui():
                         - ✅ Loss weights: text=0.3, mel=0.7
                         """)
             
-            # Auto-fill from pairs
+            # Auto-fill from pairs and tokenizer
             state.change(
                 lambda s: (
                     s.get("train_pairs", ""),
-                    s.get("val_pairs", "")
+                    s.get("val_pairs", ""),
+                    s.get("tokenizer_model", "")
                 ),
                 inputs=[state],
-                outputs=[train_manifest_path, val_manifest_path]
+                outputs=[train_manifest_path, val_manifest_path, train_tokenizer]
             )
             
             # Preset button handlers
@@ -1980,7 +1991,7 @@ def create_ui():
             start_training_btn.click(
                 start_training,
                 inputs=[
-                    train_manifest_path, val_manifest_path, train_output_dir,
+                    train_manifest_path, val_manifest_path, train_tokenizer, train_output_dir,
                     train_config, train_base_checkpoint, train_lr, train_batch, train_epochs,
                     resume_training, resume_checkpoint
                 ],
