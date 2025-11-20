@@ -262,7 +262,8 @@ def _discover_gpt_checkpoints() -> List[str]:
     bases = [
         Path(cmd_args.model_dir),
         Path(current_dir) / "models",
-        Path(current_dir) / "trained_ckpts",  # Add trained checkpoints directory
+        Path(current_dir) / "trained_ckpts",  # Legacy trained checkpoints directory
+        Path(current_dir) / "training_output",  # Current training output directory
     ]
     candidates = _candidate_paths(bases, [".pth"])
     return [path for path in candidates if _is_gpt_checkpoint(Path(path))]
