@@ -76,6 +76,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, default=0, help="Optional max optimiser steps (0 = unlimited).")
     parser.add_argument("--log-interval", type=int, default=100, help="Steps between training log entries.")
     parser.add_argument("--val-interval", type=int, default=1000, help="Validation frequency in steps (0 = once per epoch). Video recommends 1000 for faster validation.")
+    parser.add_argument("--val-batch-size", type=int, default=0, help="Validation batch size (0=auto: 2× training batch, no gradients = more VRAM available).")
+    parser.add_argument("--max-val-batches", type=int, default=200, help="Max batches for validation (0=all, 200≈10%% of dataset, saves GPU time).")
     parser.add_argument("--num-workers", type=int, default=0, help="DataLoader workers (0=auto-detect based on CPU count).")
     parser.add_argument("--grad-clip", type=float, default=1.0, help="Gradient norm clipping value.")
     parser.add_argument("--text-loss-weight", type=float, default=0.2, help="Weight for text CE loss.")
@@ -627,12 +629,26 @@ def cleanup_pycache() -> None:
         print(f"[Warn] Cleanup encountered an error: {e}")
 
 
-def evaluate(model: UnifiedVoice, loader: DataLoader, device: torch.device) -> Dict[str, float]:
+def evaluate(model: UnifiedVoice, loader: DataLoader, device: torch.device, max_batches: int = 0) -> Dict[str, float]:
+    """Evaluate model on validation set.
+    
+    Args:
+        model: Model to evaluate
+        loader: Validation data loader
+        device: Device to run on
+        max_batches: Maximum number of batches to evaluate (0=all). Saves GPU time.
+    
+    Returns:
+        Dictionary with average losses and metrics
+    """
     model.eval()
     totals = {"text_loss": 0.0, "mel_loss": 0.0, "mel_top1": 0.0}
     count = 0
     with torch.no_grad():
-        for batch in loader:
+        for batch_idx, batch in enumerate(loader):
+            # Early stopping: limit validation batches to save GPU time
+            if max_batches > 0 and batch_idx >= max_batches:
+                break
             text_loss, mel_loss, metrics = compute_losses(model, batch, device)
             bsz = batch["text_ids"].size(0)
             totals["text_loss"] += text_loss.item() * bsz
@@ -789,7 +805,12 @@ def main() -> None:
     }
 
     def checkpoint_extra(extra_type: str) -> Dict[str, object]:
-        return {"type": extra_type, "manifests": manifest_metadata}
+        return {
+            "type": extra_type,
+            "manifests": manifest_metadata,
+            "tokenizer": str(args.tokenizer),  # Track tokenizer for validation
+            "amp_dtype": hw_config.amp_dtype,  # Track AMP dtype for compatibility
+        }
 
     use_cuda = torch.cuda.is_available()
 
@@ -801,14 +822,18 @@ def main() -> None:
         collate_fn=collate_batch,
         pin_memory=use_cuda,
     )
+    # GPU optimization: 2× batch size for validation (no gradients = more VRAM available)
+    val_batch_size = args.val_batch_size if args.val_batch_size > 0 else (args.batch_size * 2)
     val_loader = DataLoader(
         val_dataset,
-        batch_size=args.batch_size,
+        batch_size=val_batch_size,
         shuffle=False,
         num_workers=args.num_workers,
         collate_fn=collate_batch,
         pin_memory=use_cuda,
+        persistent_workers=True if args.num_workers > 0 else False,  # Keep workers alive between val runs
     )
+    print(f"[Info] Validation: batch_size={val_batch_size}, max_batches={args.max_val_batches} (0=unlimited)")
 
     optimizer = AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
     total_steps = args.max_steps if args.max_steps > 0 else args.epochs * max(1, len(train_loader)) // max(1, args.grad_accumulation)
@@ -836,6 +861,7 @@ def main() -> None:
     start_batch_idx = 0
     recent_checkpoints: List[str] = []
     last_saved_step: int | None = None
+    original_train_loader_length = len(train_loader)  # Store for epoch boundary calculation
 
     resume_path: str | None = None
     if args.resume:
@@ -907,6 +933,22 @@ def main() -> None:
             else:
                 print("[Info] Using FRESH optimizer and scheduler (incompatible checkpoint)")
                 print("[Info] Training will take longer to converge, but WILL learn correctly")
+                # CRITICAL FIX: Reset global_step to realign scheduler with fresh optimizer
+                # Without this, scheduler continues from old step with new optimizer state
+                print(f"[Info] Resetting scheduler to align with fresh optimizer (step {global_step})")
+                # Recreate scheduler to match current step
+                scheduler = get_cosine_schedule_with_warmup(
+                    optimizer,
+                    num_warmup_steps=args.warmup_steps,
+                    num_training_steps=total_steps,
+                )
+                # Fast-forward scheduler to current step
+                for _ in range(global_step):
+                    scheduler.step()
+                # CRITICAL: Also reset scaler when optimizer is reset (state desync)
+                if scaler is not None:
+                    print("[Info] Resetting gradient scaler to align with fresh optimizer")
+                    scaler = torch.cuda.amp.GradScaler()
             
             # Load scaler state (for AMP)
             # Note: bfloat16 doesn't use scaler (scaler=None), float16 does
@@ -931,6 +973,68 @@ def main() -> None:
             global_step = checkpoint.get("step", 0)
             recent_checkpoints = checkpoint.get("recent_checkpoints", [])
             last_saved_step = checkpoint.get("step")
+            
+            # CRITICAL: Validate training config compatibility
+            ckpt_batch_size = checkpoint.get("batch_size")
+            ckpt_grad_accum = checkpoint.get("grad_accumulation")
+            ckpt_pt_version = checkpoint.get("pytorch_version", "unknown")
+            ckpt_peak_memory = checkpoint.get("cuda_peak_memory", 0)
+            
+            # Validate PyTorch version compatibility
+            if ckpt_pt_version != "unknown":
+                ckpt_major = ckpt_pt_version.split('.')[0]
+                current_major = torch.__version__.split('.')[0]
+                if ckpt_major != current_major:
+                    raise RuntimeError(
+                        f"❌ CRITICAL: PyTorch major version mismatch!\n"
+                        f"   Checkpoint: {ckpt_pt_version}\n"
+                        f"   Current: {torch.__version__}\n"
+                        f"   Optimizer state is incompatible across major versions.\n"
+                        f"   Please use PyTorch {ckpt_major}.x or start training from scratch."
+                    )
+            
+            # Validate effective batch size (strict)
+            if ckpt_batch_size is not None and ckpt_grad_accum is not None:
+                old_effective = ckpt_batch_size * ckpt_grad_accum
+                new_effective = args.batch_size * args.grad_accumulation
+                
+                if old_effective != new_effective:
+                    raise RuntimeError(
+                        f"❌ CRITICAL: Effective batch size changed!\n"
+                        f"   Checkpoint: {ckpt_batch_size} × {ckpt_grad_accum} = {old_effective}\n"
+                        f"   Current: {args.batch_size} × {args.grad_accumulation} = {new_effective}\n"
+                        f"   This breaks optimizer momentum and learning rate scaling.\n"
+                        f"   Use --batch-size {ckpt_batch_size} --grad-accumulation {ckpt_grad_accum} to match checkpoint."
+                    )
+                elif ckpt_grad_accum != args.grad_accumulation:
+                    print(f"\n⚠️  WARNING: Gradient accumulation changed (same effective batch)")
+                    print(f"   Checkpoint: grad_accum={ckpt_grad_accum}")
+                    print(f"   Current: grad_accum={args.grad_accumulation}")
+                    print(f"   Loss scaling differs - expect temporary instability for ~1000 steps.\n")
+            
+            # Validate memory availability
+            if ckpt_peak_memory > 0 and torch.cuda.is_available():
+                available = torch.cuda.get_device_properties(0).total_memory
+                if ckpt_peak_memory > available * 0.95:
+                    print(f"\n⚠️  WARNING: OOM risk detected!")
+                    print(f"   Checkpoint peak memory: {ckpt_peak_memory / 1e9:.1f}GB")
+                    print(f"   Current GPU memory: {available / 1e9:.1f}GB")
+                    print(f"   Consider reducing batch size if OOM occurs.\n")
+            
+            # Restore RNG states for reproducible shuffle
+            if "rng_state" in checkpoint:
+                try:
+                    # Restore CPU RNG
+                    torch.set_rng_state(checkpoint["rng_state"].get("torch_cpu", checkpoint["rng_state"].get("torch")))
+                    # Restore CUDA RNG (all GPUs)
+                    if checkpoint["rng_state"].get("torch_cuda") is not None and torch.cuda.is_available():
+                        torch.cuda.set_rng_state_all(checkpoint["rng_state"]["torch_cuda"])
+                    # Restore NumPy and Python RNG
+                    np.random.set_state(checkpoint["rng_state"]["numpy"])
+                    random.setstate(checkpoint["rng_state"]["python"])
+                    print("[Info] Restored RNG states (CPU+CUDA, reproducible shuffle)")
+                except Exception as e:
+                    print(f"[Warn] Could not restore RNG states: {e}")
             
             print(f"[Info] ✅ Successfully resumed from {resume_path}")
             print(f"[Info]    Epoch: {start_epoch}, Step: {global_step}, Batch: {start_batch_idx}")
@@ -971,15 +1075,9 @@ def main() -> None:
         print("[Info] Skipping startup validation; will evaluate after next training interval.")
 
     # Calculate if we need to skip batches (resumed mid-epoch)
+    # CRITICAL FIX: Don't align batch skip - it causes duplicate/skipped training
+    # The checkpoint saves exact batch position, we must resume from exact position
     skip_batches_first_epoch = start_batch_idx if start_batch_idx > 0 else 0
-    
-    # Align batch skipping with gradient accumulation boundaries
-    if skip_batches_first_epoch > 0 and args.grad_accumulation > 1:
-        # Round down to nearest gradient accumulation boundary
-        aligned_skip = (skip_batches_first_epoch // args.grad_accumulation) * args.grad_accumulation
-        if aligned_skip != skip_batches_first_epoch:
-            print(f"[Info] Aligning batch skip from {skip_batches_first_epoch} to {aligned_skip} (grad_accumulation={args.grad_accumulation})")
-            skip_batches_first_epoch = aligned_skip
     
     for epoch in range(start_epoch, args.epochs):
         # Reset batch index at the start of each NEW epoch (not when resuming mid-epoch)
@@ -1009,7 +1107,10 @@ def main() -> None:
         else:
             epoch_loader = train_loader
         
-        for batch_idx, batch in enumerate(epoch_loader, start=skip_batches_first_epoch if epoch == start_epoch else 0):
+        # CRITICAL FIX: Use real batch index from full dataset, not subset position
+        # This ensures checkpoint saves correct absolute position
+        for subset_idx, batch in enumerate(epoch_loader):
+            batch_idx = subset_idx + (skip_batches_first_epoch if epoch == start_epoch else 0)
             with torch.cuda.amp.autocast(enabled=use_amp, dtype=amp_dtype if use_amp else torch.float32):
                 text_loss, mel_loss, metrics = compute_losses(model, batch, device)
                 loss = args.text_loss_weight * text_loss + args.mel_loss_weight * mel_loss
@@ -1049,7 +1150,7 @@ def main() -> None:
                     )
 
                 if args.val_interval > 0 and global_step > 0 and global_step % args.val_interval == 0:
-                    val_metrics = evaluate(model, val_loader, device)
+                    val_metrics = evaluate(model, val_loader, device, max_batches=args.max_val_batches)
                     writer.add_scalar("val/text_loss", val_metrics["text_loss"], global_step)
                     writer.add_scalar("val/mel_loss", val_metrics["mel_loss"], global_step)
                     writer.add_scalar("val/mel_top1", val_metrics["mel_top1"], global_step)
@@ -1072,10 +1173,19 @@ def main() -> None:
                     # Calculate next position to resume from
                     next_batch = batch_idx + 1
                     next_epoch = epoch
+                    # CRITICAL FIX: Use original train_loader length, not subset length
                     # Handle epoch boundary: if next batch exceeds epoch, move to next epoch
-                    if next_batch >= len(train_loader):
+                    if next_batch >= original_train_loader_length:
                         next_batch = 0
                         next_epoch = epoch + 1
+                    
+                    # CRITICAL FIX: Save RNG states for reproducible shuffle on resume
+                    rng_state = {
+                        "torch_cpu": torch.get_rng_state(),
+                        "torch_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+                        "numpy": np.random.get_state(),
+                        "python": random.getstate(),
+                    }
                     
                     save_checkpoint(
                         ckpt_path,
@@ -1089,6 +1199,10 @@ def main() -> None:
                         next_batch,
                         extra=checkpoint_extra("step"),
                     )
+                    
+                    # CRITICAL: Atomic write to prevent corruption on interruption
+                    latest_path = output_dir / "latest.pth"
+                    latest_tmp = output_dir / "latest.pth.tmp"
                     torch.save(
                         {
                             "model": model.state_dict(),
@@ -1100,9 +1214,20 @@ def main() -> None:
                             "batch_idx": next_batch,
                             "recent_checkpoints": recent_checkpoints,
                             "manifests": manifest_metadata,
+                            "rng_state": rng_state,
+                            "batch_size": args.batch_size,
+                            "grad_accumulation": args.grad_accumulation,
+                            "pytorch_version": torch.__version__,
+                            "cuda_version": torch.version.cuda if torch.cuda.is_available() else None,
+                            "cuda_peak_memory": torch.cuda.max_memory_allocated() if torch.cuda.is_available() else 0,
                         },
-                        output_dir / "latest.pth",
+                        latest_tmp,
                     )
+                    # Ensure data is flushed to disk before replace
+                    if latest_tmp.exists():
+                        with latest_tmp.open('rb') as f:
+                            os.fsync(f.fileno())
+                    latest_tmp.replace(latest_path)  # Atomic on POSIX/Windows
                     # Clean up old checkpoints beyond keep limit
                     cleanup_old_checkpoints(output_dir, recent_checkpoints, args.keep_checkpoints)
                     last_saved_step = global_step
@@ -1117,7 +1242,7 @@ def main() -> None:
             break
 
         if args.val_interval == 0:
-            val_metrics = evaluate(model, val_loader, device)
+            val_metrics = evaluate(model, val_loader, device, max_batches=args.max_val_batches)
             writer.add_scalar("val/text_loss", val_metrics["text_loss"], global_step)
             writer.add_scalar("val/mel_loss", val_metrics["mel_loss"], global_step)
             writer.add_scalar("val/mel_top1", val_metrics["mel_top1"], global_step)
@@ -1133,6 +1258,15 @@ def main() -> None:
     if global_step > 0 and last_saved_step != global_step:
         ckpt_path = output_dir / f"model_step{global_step}.pth"
         recent_checkpoints.append(str(ckpt_path))
+        
+        # Save RNG states for final checkpoint too
+        rng_state = {
+            "torch_cpu": torch.get_rng_state(),
+            "torch_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+            "numpy": np.random.get_state(),
+            "python": random.getstate(),
+        }
+        
         save_checkpoint(
             ckpt_path,
             model,
@@ -1145,6 +1279,8 @@ def main() -> None:
             0,  # Training complete
             extra=checkpoint_extra("final"),
         )
+        latest_path = output_dir / "latest.pth"
+        latest_tmp = output_dir / "latest.pth.tmp"
         torch.save(
             {
                 "model": model.state_dict(),
@@ -1156,9 +1292,20 @@ def main() -> None:
                 "batch_idx": 0,  # Training complete
                 "recent_checkpoints": recent_checkpoints,
                 "manifests": manifest_metadata,
+                "rng_state": rng_state,
+                "batch_size": args.batch_size,
+                "grad_accumulation": args.grad_accumulation,
+                "pytorch_version": torch.__version__,
+                "cuda_version": torch.version.cuda if torch.cuda.is_available() else None,
+                "cuda_peak_memory": torch.cuda.max_memory_allocated() if torch.cuda.is_available() else 0,
             },
-            output_dir / "latest.pth",
+            latest_tmp,
         )
+        # Ensure data is flushed to disk
+        if latest_tmp.exists():
+            with latest_tmp.open('rb') as f:
+                os.fsync(f.fileno())
+        latest_tmp.replace(latest_path)  # Atomic
         # Clean up old checkpoints beyond keep limit
         cleanup_old_checkpoints(output_dir, recent_checkpoints)
 
