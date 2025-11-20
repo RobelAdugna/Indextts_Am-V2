@@ -157,11 +157,14 @@ class IndexTTS2:
         if vocab_from_checkpoint:
             current_vocab = self.cfg.gpt.get("number_text_tokens", vocab_from_checkpoint)
             if current_vocab != vocab_from_checkpoint:
+                # UnifiedVoice adds +1 for STOP_TEXT_TOKEN, so subtract 1 here to avoid double-counting
+                # e.g., if checkpoint has 24001 embeddings, set config to 24000 so model creates 24001 (24000+1)
+                adjusted_vocab = vocab_from_checkpoint - 1
                 print(
-                    f">> Adjusting GPT config vocab size from "
-                    f"{current_vocab} to {vocab_from_checkpoint} based on checkpoint."
+                    f">> Adjusting GPT config vocab size from {current_vocab} to {adjusted_vocab} "
+                    f"(checkpoint has {vocab_from_checkpoint} embeddings, model will add +1 for STOP token)."
                 )
-                self.cfg.gpt.number_text_tokens = vocab_from_checkpoint
+                self.cfg.gpt.number_text_tokens = adjusted_vocab
 
         self.gpt = UnifiedVoice(**self.cfg.gpt)
         self._load_gpt_weights(self.gpt, gpt_state)

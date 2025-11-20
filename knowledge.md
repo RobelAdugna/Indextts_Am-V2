@@ -184,6 +184,23 @@ python trainers/train_gpt_v2.py \
 
 **See `AMHARIC_TRAINING_FIX.md` for complete analysis and diagnostics.**
 
+### CRITICAL: Inference Vocab Size Bug (FIXED 2025-01)
+
+**Problem:** Extended vocab models (24k tokens) produce nonsense speech during inference even though training works correctly.
+
+**Root Cause:** 
+- Tokenizer: 24000 tokens
+- Model reserves STOP_TEXT_TOKEN at position `vocab_size + 1`
+- Training correctly uses 24001 embeddings (24000 + 1 STOP)
+- **Inference bug:** Loads 24001 from checkpoint, then adds +1 again → creates 24002 embeddings
+- Reshaping from 24001→24002 scrambles learned Amharic weights (IDs 12000-23999)
+
+**Fix Applied:** `indextts/infer_v2_modded.py` now subtracts 1 when setting config from checkpoint, preventing double-counting of STOP token.
+
+**Evidence of bug:** Inference log showed `"Reshaping from [24001, 1280] to [24002, 1280]"` - this scrambled the embeddings!
+
+**See `INFERENCE_VOCAB_FIX.md` for complete details.**
+
 ### Resume Training
 
 **Feature:** Automatically resume interrupted training from checkpoints
