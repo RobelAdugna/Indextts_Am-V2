@@ -880,8 +880,8 @@ def main() -> None:
     if resume_path:
         try:
             print(f"[Info] Loading checkpoint from {resume_path}...")
-            checkpoint = torch.load(resume_path, map_location=device)
-            
+            # checkpoint = torch.load(resume_path, map_location=device)
+            checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
             # Validate checkpoint structure
             required_keys = ["model", "optimizer", "epoch", "step"]
             missing_keys = [k for k in required_keys if k not in checkpoint]
