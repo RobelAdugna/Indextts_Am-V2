@@ -1,13 +1,26 @@
 {
-  "description": "Template configuration for this project. See https://www.codebuff.com/config for all options.",
+  "description": "IndexTTS2 project configuration. Amharic WebUI available at http://localhost:7863",
   "startupProcesses": [
     {
       "name": "webui",
-      "command": "python webui_amharic.py",
-      "enabled": false,
-      "stdoutFile": "logs/webui.log"
+      "command": "python webui_amharic.py --share",
+      "enabled": true,
+      "stdoutFile": "logs/webui.log",
+      "cwd": "."
     }
   ],
-  "fileChangeHooks": [],
-  "maxAgentSteps": 25
+  "fileChangeHooks": [
+    {
+      "name": "typecheck",
+      "command": "python -m py_compile",
+      "filePattern": "**/*.py",
+      "enabled": false
+    }
+  ],
+  "maxAgentSteps": 50,
+  "baseAgent": "codebuff/buffy@latest",
+  "addedSpawnableAgents": [
+    "codebuff/researcher-web@latest",
+    "codebuff/researcher-docs@latest"
+  ]
 }

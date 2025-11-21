@@ -932,45 +932,48 @@ def main() -> None:
             if unexpected:
                 print(f"[Warn] Unexpected keys: {unexpected[:3]}..." if len(unexpected) > 3 else f"[Warn] Unexpected: {unexpected}")
             
-            # Only load optimizer/scheduler if vocab sizes match
+            # Only load optimizer/scheduler/scaler if vocab sizes match
             if not skip_optimizer_load:
                 print("[Info] Restoring optimizer state...")
                 optimizer.load_state_dict(checkpoint["optimizer"])
                 
                 print("[Info] Restoring scheduler state...")
-                scheduler.load_state_dict(checkpoint["scheduler"])
+                if checkpoint.get("scheduler"):
+                    scheduler.load_state_dict(checkpoint["scheduler"])
+                
+                # Load scaler state (for AMP)
+                # Note: bfloat16 doesn't use scaler (scaler=None), float16 does
+                if scaler is not None and checkpoint.get("scaler") is not None:
+                    print("[Info] Restoring gradient scaler state...")
+                    try:
+                        scaler.load_state_dict(checkpoint["scaler"])
+                    except Exception as e:
+                        print(f"[Warn] Could not restore scaler state: {e}. Using fresh scaler.")
+                        scaler = torch.cuda.amp.GradScaler()
+                elif scaler is not None and checkpoint.get("scaler") is None:
+                    print("[Warn] AMP enabled but no scaler state in checkpoint, using fresh scaler")
+                elif scaler is None and checkpoint.get("scaler") is not None:
+                    print("[Info] Checkpoint has scaler but current run uses bfloat16 (no scaler needed)")
             else:
-                print("[Info] Using FRESH optimizer and scheduler (incompatible checkpoint)")
-                print("[Info] Training will take longer to converge, but WILL learn correctly")
-                # CRITICAL FIX: Reset global_step to realign scheduler with fresh optimizer
-                # Without this, scheduler continues from old step with new optimizer state
-                print(f"[Info] Resetting scheduler to align with fresh optimizer (step {global_step})")
-                # Recreate scheduler to match current step
+                print("[Info] ❌ SKIPPING optimizer, scheduler, AND scaler restore (incompatible checkpoint)")
+                print("[Info] ✅ Using FRESH optimizer with initial LR and warmup")
+                print(f"[Info] 🔄 Training will RESTART from step 0 (was at step {global_step})")
+                print("[Info] 📊 Expect losses to drop significantly within 5k-10k steps")
+                # Reset global_step to 0 for proper warmup with fresh optimizer
+                global_step = 0
+                # Recreate scheduler with fresh state (starts at step 0)
                 scheduler = get_cosine_schedule_with_warmup(
                     optimizer,
                     num_warmup_steps=args.warmup_steps,
                     num_training_steps=total_steps,
                 )
-                # Fast-forward scheduler to current step
-                for _ in range(global_step):
-                    scheduler.step()
-                # CRITICAL: Also reset scaler when optimizer is reset (state desync)
+                # Reset scaler to match fresh optimizer
                 if scaler is not None:
                     print("[Info] Resetting gradient scaler to align with fresh optimizer")
                     scaler = torch.cuda.amp.GradScaler()
-            
-            # Load scaler state (for AMP)
-            # Note: bfloat16 doesn't use scaler (scaler=None), float16 does
-            if scaler is not None and checkpoint.get("scaler") is not None:
-                print("[Info] Restoring gradient scaler state...")
-                try:
-                    scaler.load_state_dict(checkpoint["scaler"])
-                except Exception as e:
-                    print(f"[Warn] Could not restore scaler state: {e}. Using fresh scaler.")
-            elif scaler is not None and checkpoint.get("scaler") is None:
-                print("[Warn] AMP enabled but no scaler state in checkpoint, using fresh scaler")
-            elif scaler is None and checkpoint.get("scaler") is not None:
-                print("[Info] Checkpoint has scaler but current run uses bfloat16 (no scaler needed)")
+                # CRITICAL: Also reset last_saved_step to allow first checkpoint save
+                last_saved_step = None
+                print("[Info] ⚠️  Note: Checkpoint counter resets to 0 (fresh training)")
             
             # Restore training state
             # CRITICAL: Proper epoch/batch restoration

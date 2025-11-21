@@ -260,10 +260,12 @@ python trainers/train_gpt_v2.py \
 
 **CRITICAL for Extended Vocabularies (Amharic, Korean, Arabic, etc.):**
 - ✅ Resume works with gradient hook fix (hooks re-register automatically)
+- ✅ **Scheduler bug fixed (2025-01-21)** - fresh optimizer now gets fresh scheduler + scaler
 - ❌ **Don't resume from pre-fix checkpoints** - optimizer state is corrupted from training with random embeddings
 - ✅ **Start fresh after applying fix** - much faster to good results
 - ✅ **Future resumes work perfectly** - once trained with fix, resume is seamless
-- See `RESUME_TRAINING_WITH_FIX.md` for detailed explanation
+- See `RESUME_TRAINING_WITH_FIX.md` for gradient hook details
+- See `RESUME_TRAINING_SCHEDULER_FIX.md` for scheduler bug fix details
 
 **Epoch Tracking on Resume (FIXED 2025-01):**
 - Bug: Epoch incremented on every resume, causing epoch number to be incorrect
