@@ -898,14 +898,23 @@ def main() -> None:
                         break
             
             skip_optimizer_load = False
-            if checkpoint_vocab is not None and checkpoint_vocab != current_vocab_size:
+            # CRITICAL: Model has vocab_size + 1 embeddings (for STOP_TEXT_TOKEN)
+            # Checkpoint stores text_embedding.weight with shape [vocab_size + 1, hidden]
+            # So we need to subtract 1 from checkpoint_vocab before comparing
+            checkpoint_actual_vocab = checkpoint_vocab - 1 if checkpoint_vocab is not None else None
+            
+            if checkpoint_actual_vocab is not None and checkpoint_actual_vocab != current_vocab_size:
                 print(f"\n🚨 CRITICAL: Vocab size mismatch detected!")
-                print(f"   Checkpoint vocab: {checkpoint_vocab}")
-                print(f"   Current tokenizer: {current_vocab_size}")
+                print(f"   Checkpoint vocab: {checkpoint_vocab} embeddings = {checkpoint_actual_vocab} tokens + STOP")
+                print(f"   Current tokenizer: {current_vocab_size} tokens")
+                print(f"   Difference: {abs(checkpoint_actual_vocab - current_vocab_size)} tokens")
                 print(f"   Optimizer state is INCOMPATIBLE with current model.")
                 print(f"   ❌ Will NOT load optimizer/scheduler (would prevent learning!)")
                 print(f"   ✅ Will load model weights and continue with fresh optimizer.\n")
                 skip_optimizer_load = True
+            elif checkpoint_vocab is not None:
+                # Vocab sizes match (accounting for STOP token)
+                print(f"[Info] ✅ Vocab size validated: {checkpoint_vocab} embeddings ({checkpoint_actual_vocab} tokens + STOP)")
             
             # Validate tokenizer path matches (critical for correct token mappings)
             checkpoint_tokenizer = checkpoint.get("manifests", {}).get("tokenizer")

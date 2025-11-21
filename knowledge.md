@@ -256,7 +256,7 @@ python trainers/train_gpt_v2.py \
 - If checkpoint not found, check `--output-dir` matches previous run
 - If incompatible checkpoint, ensure same tokenizer/config
 - If OOM after resume, reduce `--batch-size`
-- **CRITICAL: Vocab mismatch breaks training!** If checkpoint has different vocab size than current tokenizer (even 1 token difference), optimizer state becomes incompatible. Symptoms: losses completely stuck, no learning. Fix: Code detects mismatch and skips incompatible optimizer state automatically (uses fresh optimizer but preserves model weights). See `TRAINING_STUCK_FIX_COMPLETE.md` and `VOCAB_MISMATCH_FIX.md` for details.
+- **Vocab size validation:** Resume code correctly accounts for STOP_TEXT_TOKEN. Checkpoint has vocab_size+1 embeddings (e.g., 24,001 for 24k tokenizer). Code subtracts 1 before comparing with tokenizer vocab. A true mismatch (different token counts) triggers fresh optimizer to prevent training failures.
 
 **CRITICAL for Extended Vocabularies (Amharic, Korean, Arabic, etc.):**
 - ✅ Resume works with gradient hook fix (hooks re-register automatically)
@@ -1201,6 +1201,8 @@ python tools/process_dataset_segments.py \
 - Read `AMHARIC_IMPLEMENTATION_*.md` for details
 - See `README_AMHARIC_WEBUI.md` for WebUI usage
 - See `HARDWARE_AUTO_OPTIMIZATION.md` for hardware optimization
+- See `VOCAB_SIZE_EXPLAINED.md` for understanding vocab vs embeddings
+- See `VOCAB_VALIDATION_FIX.md` for resume training vocab fix details
 
 ### External References
 - [IndexTTS2 Paper](https://arxiv.org/abs/2506.21619)
