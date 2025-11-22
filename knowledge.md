@@ -261,17 +261,45 @@ python trainers/train_gpt_v2.py \
 **CRITICAL for Extended Vocabularies (Amharic, Korean, Arabic, etc.):**
 - ✅ Resume works with gradient hook fix (hooks re-register automatically)
 - ✅ **Scheduler bug fixed (2025-01-21)** - fresh optimizer now gets fresh scheduler + scaler
+- ✅ **Loss spike bug fixed (2025-01-22)** - comprehensive validation detects all resume issues
 - ❌ **Don't resume from pre-fix checkpoints** - optimizer state is corrupted from training with random embeddings
 - ✅ **Start fresh after applying fix** - much faster to good results
 - ✅ **Future resumes work perfectly** - once trained with fix, resume is seamless
 - See `RESUME_TRAINING_WITH_FIX.md` for gradient hook details
 - See `RESUME_TRAINING_SCHEDULER_FIX.md` for scheduler bug fix details
+- See `TRAINING_RESUME_LOSS_SPIKE_FIX.md` for comprehensive validation fix
 
 **Epoch Tracking on Resume (FIXED 2025-01):**
 - Bug: Epoch incremented on every resume, causing epoch number to be incorrect
 - Fix: Checkpoint saves NEXT epoch/batch to resume from. Handles epoch boundaries correctly (when next_batch >= len(loader), increments epoch and resets batch to 0)
 - Video Best Practice: Keep last 3 checkpoints (every 1000 steps), validate every 1000 steps
 - Result: Bulletproof continuity - interrupt/resume works perfectly at any point (mid-epoch or epoch boundary)
+
+**Loss Spike on Resume (FIXED 2025-01-22):**
+- Bug: No validation of training state consistency on resume
+- Symptoms: Losses spike or plateau instead of continuing from checkpoint
+- Root causes: 9 critical bugs across 5 categories (state management, checkpoint corruption, gradient accumulation, RNG, validation)
+- Fix: Comprehensive `validate_resume_consistency()` function runs 10 validation checks:
+  1. Loss consistency (±30% expected, >50% = critical)
+  2. Learning rate validation (must match expected for current step)
+  3. Gradient masking verification (base tokens must have zero gradients)
+  4. Gradient accumulation state (warns if mid-cycle)
+  5. Optimizer state alignment (param count matches)
+  6. Vocab size compatibility (accounts for STOP_TEXT_TOKEN)
+  7. Batch size / grad accumulation (validates effective batch)
+  8. PyTorch version (prevents incompatible state)
+  9. GPU count (validates CUDA RNG compatibility)
+  10. Tokenizer path (prevents wrong mappings)
+- Additional critical fixes:
+  - ✅ model.eval() now in try/finally (prevents stuck eval mode)
+  - ✅ fsync before file close (prevents checkpoint corruption)
+  - ✅ start_epoch/batch reset with fresh optimizer (consistent state)
+  - ✅ RNG GPU count validation (prevents migration crashes)
+  - ✅ Validation OOM handling (graceful degradation)
+- Result: All resume issues detected automatically with clear diagnostics and 10-second abort window
+- See `TRAINING_RESUME_LOSS_SPIKE_FIX.md` for complete guide
+- See `TRAINING_RESUME_BULLETPROOF_VERIFICATION.md` for exhaustive verification
+- See `RESUME_TRAINING_COMPLETE_FIX_SUMMARY.md` for executive summary
 
 ### Standard Workflow
 
